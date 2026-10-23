@@ -31,3 +31,30 @@ def test_profiles_and_roles_are_separate(tmp_path: Path) -> None:
     roles.set_admin(alias, True)
     assert roles.is_admin(alias)
     assert profiles.get(alias)["notes"] == "Helps with events"
+
+
+def test_profiles_support_non_friends_search_and_pagination(tmp_path: Path) -> None:
+    vault = ContactVault(tmp_path / "contacts.json", "secret")
+    profiles = ContactDirectory(tmp_path / "profiles.json")
+    aliases = [vault.encrypt("user", str(30000 + index)) for index in range(5)]
+
+    profiles.update(aliases[0], "Alice", "Infrastructure colleague")
+    profiles.update(aliases[1], "Bob", "Event photographer")
+    profiles.update(aliases[2], "Carol", "Infrastructure colleague")
+    profiles.update(aliases[3], "Dave", "Not a QQ friend")
+
+    first = profiles.page(page=1, page_size=2)
+    second = profiles.page(page=2, page_size=2)
+    found = profiles.page(query="infrastructure", page=1, page_size=10)
+
+    assert first["total"] == 4
+    assert first["total_pages"] == 2
+    assert first["has_more"] is True
+    assert len(first["items"]) == 2
+    assert len(second["items"]) == 2
+    assert found["total"] == 2
+    assert all("Infrastructure" in item["notes"] for item in found["items"])
+    assert "30003" not in str(second)
+
+    assert profiles.remove(aliases[3]) is True
+    assert profiles.get(aliases[3])["found"] is False

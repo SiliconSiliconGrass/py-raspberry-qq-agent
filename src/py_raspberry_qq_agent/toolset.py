@@ -593,6 +593,25 @@ def build_tool_registry(
     async def get_contact_profile(args: dict[str, Any]) -> dict[str, Any]:
         return contacts.get(_required_str(args, "encrypted_id"))
 
+    async def list_contact_profiles(args: dict[str, Any]) -> dict[str, Any]:
+        return contacts.page(
+            page=int(args.get("page", 1)),
+            page_size=min(
+                max(int(args.get("page_size", config.directory_default_page_size)), 1),
+                config.directory_max_page_size,
+            ),
+        )
+
+    async def search_contact_profiles(args: dict[str, Any]) -> dict[str, Any]:
+        return contacts.page(
+            query=_required_str(args, "query"),
+            page=int(args.get("page", 1)),
+            page_size=min(
+                max(int(args.get("page_size", config.directory_default_page_size)), 1),
+                config.directory_max_page_size,
+            ),
+        )
+
     async def update_contact_profile(args: dict[str, Any]) -> dict[str, Any]:
         encrypted_id = _required_str(args, "encrypted_id")
         display_name = _optional_str(args, "display_name")
@@ -603,15 +622,51 @@ def build_tool_registry(
 
     for name, description, schema, handler in (
         (
+            "list_contact_profiles",
+            (
+                "分页列出机器人保存的全部联系人资料。资料独立于 QQ 好友列表，"
+                "包含群聊中见过或人工预置的非好友同事。"
+            ),
+            _object_schema(
+                {
+                    "page": {"type": "integer", "minimum": 1},
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": config.directory_max_page_size,
+                    },
+                }
+            ),
+            list_contact_profiles,
+        ),
+        (
+            "search_contact_profiles",
+            "按加密标识、显示名称或备注搜索联系人资料，并支持分页。",
+            _object_schema(
+                {
+                    "query": {"type": "string"},
+                    "page": {"type": "integer", "minimum": 1},
+                    "page_size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": config.directory_max_page_size,
+                    },
+                },
+                ["query"],
+            ),
+            search_contact_profiles,
+        ),
+        (
             "get_contact_profile",
-            "读取加密联系人的昵称和备注。",
+            "读取一个加密联系人的资料；该账号不要求是机器人 QQ 好友。",
             _object_schema({"encrypted_id": {"type": "string"}}, ["encrypted_id"]),
             get_contact_profile,
         ),
         (
             "update_contact_profile",
             (
-                "更新加密联系人的昵称或备注，用于逐渐认识陌生用户。"
+                "新建或更新加密联系人的昵称和备注，用于逐渐认识群聊中的同事。"
+                "该账号不要求是机器人 QQ 好友。"
                 "此工具不能修改 admin 权限。"
             ),
             _object_schema(

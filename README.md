@@ -180,6 +180,38 @@ directory:
 
 这两个查询是只读操作，不受聊天允许列表限制。
 
+## 联系人资料（支持非好友）
+
+`profiles.json` 按加密 QQ 标识记录资料，不依赖 QQ 好友关系。机器人可以在群聊中见到
+非好友同事后记录其资料，也可以由运维人员提前预置。
+
+人工新增或更新：
+
+```powershell
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml `
+  profile set --qq 123456789 --name "张三" --notes "技术组同事，负责服务器维护"
+```
+
+查询、分页和删除：
+
+```powershell
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml profile get --qq 123456789
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml profile list --page 1
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml profile list --search "技术组"
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml profile remove --qq 123456789
+```
+
+CLI 会先把 QQ 号转换成加密标识，再写入 `profiles.json`，命令行和文件输出不会包含原始
+QQ 号。Agent 对应工具为：
+
+- `list_contact_profiles`：分页浏览资料库。
+- `search_contact_profiles`：按加密标识、显示名称或备注搜索。
+- `get_contact_profile`：读取指定加密账号的资料。
+- `update_contact_profile`：新建或更新资料，不能修改 admin 权限。
+
+手动修改资料时应先停止 Agent，完成后重启，避免运行中的资料缓存覆盖文件。
+`profile remove` 只删除身份资料，不会修改 `roles.json`；撤销 admin 仍需使用 `admin remove`。
+
 ## TODO 与主 Agent
 
 消息、定时任务和定时群摘要都会进入同一份 TODO。每次唤醒时，完整 TODO 会交给主 Agent；

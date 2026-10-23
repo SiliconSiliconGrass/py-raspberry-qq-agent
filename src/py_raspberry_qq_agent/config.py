@@ -412,6 +412,9 @@ def _default_system_prompt() -> str:
 8. 你只能看到加密后的 QQ 用户或群标识。绝不猜测、构造或索取 QQ 号，也不要尝试还原
    真实身份。
 9. 你可以读取和修改联系人资料，但不能授予或收回 admin 权限。权限信息只读。
+    联系人资料独立于 QQ 好友列表；即使对方不是好友，只要知道其加密聊天标识，也可以
+    用 get_contact_profile 或 update_contact_profile 查看和记录。需要辨认同事时可使用
+    list_contact_profiles 或 search_contact_profiles 按页查找。
     需要确认机器人加入了哪些群或有哪些好友时，调用 list_qq_groups 或
     list_qq_friends；结果较多时按返回的 page、total_pages 和 has_more 继续分页。
 10. 每次处理完一个 TODO，必须调用 delete_todo_item 删除对应 id。若 TODO 列表仍不为空，

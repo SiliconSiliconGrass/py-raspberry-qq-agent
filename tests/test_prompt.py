@@ -11,6 +11,8 @@ def test_tree_raspberry_prompt_keeps_persona_and_removes_catchphrases() -> None:
     assert "delete_todo_item" in prompt
     assert "list_qq_friends" in prompt
     assert "list_qq_groups" in prompt
+    assert "list_contact_profiles" in prompt
+    assert "search_contact_profiles" in prompt
     assert "Ciallo" not in prompt
     assert "强强" not in prompt
     assert "唐完了" not in prompt

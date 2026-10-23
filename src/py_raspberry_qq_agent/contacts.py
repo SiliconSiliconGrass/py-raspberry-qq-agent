@@ -95,6 +95,7 @@ class ContactDirectory:
     def get(self, encrypted_id: str) -> dict[str, object]:
         profile = self._profiles.get(encrypted_id, {})
         return {
+            "found": encrypted_id in self._profiles,
             "encrypted_id": encrypted_id,
             "display_name": profile.get("display_name", ""),
             "notes": profile.get("notes", ""),
@@ -124,6 +125,59 @@ class ContactDirectory:
         profile["updated_at"] = datetime.now(UTC).isoformat()
         self._save()
         return self.get(encrypted_id)
+
+    def page(
+        self,
+        *,
+        query: str = "",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, object]:
+        if page < 1:
+            raise ValueError("page must be at least 1")
+        if page_size < 1:
+            raise ValueError("page_size must be at least 1")
+        needle = query.strip().casefold()
+        items = [self.get(encrypted_id) for encrypted_id in self._profiles]
+        if needle:
+            items = [
+                item
+                for item in items
+                if needle
+                in " ".join(
+                    (
+                        str(item["encrypted_id"]),
+                        str(item["display_name"]),
+                        str(item["notes"]),
+                    )
+                ).casefold()
+            ]
+        items.sort(
+            key=lambda item: (
+                str(item["display_name"]).casefold(),
+                str(item["encrypted_id"]),
+            )
+        )
+        total = len(items)
+        total_pages = (total + page_size - 1) // page_size if total else 0
+        start = (page - 1) * page_size
+        end = start + page_size
+        return {
+            "kind": "profile",
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_more": end < total,
+            "items": items[start:end],
+        }
+
+    def remove(self, encrypted_id: str) -> bool:
+        if encrypted_id not in self._profiles:
+            return False
+        del self._profiles[encrypted_id]
+        self._save()
+        return True
 
     def _save(self) -> None:
         atomic_write_json(
