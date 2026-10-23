@@ -18,7 +18,7 @@ from .napcat import IncomingMessage, NapCatClient, OutboundQueue
 from .priority import ImportanceGate
 from .scheduler import ScheduledTask, Scheduler, ScheduleStore
 from .todos import TodoStore
-from .toolset import HistoryService, build_tool_registry
+from .toolset import ChatDirectoryService, HistoryService, build_tool_registry
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class Application:
     outbound: OutboundQueue
     allowlist: ChatAllowlist
     history: HistoryService
+    chat_directory: ChatDirectoryService
     incoming: IncomingService
     digest: GroupDigestService
     worker: AgentWorker | None = None
@@ -115,6 +116,7 @@ class Application:
             config, classifier_llm, allowlist, roles, contacts, messages
         )
         history = HistoryService(config, messages, napcat, vault)
+        chat_directory = ChatDirectoryService(config, napcat, vault)
         incoming = IncomingService(
             vault=vault,
             contacts=contacts,
@@ -148,6 +150,7 @@ class Application:
             outbound=outbound,
             allowlist=allowlist,
             history=history,
+            chat_directory=chat_directory,
             incoming=incoming,
             digest=digest,
             _worker_ref=worker_ref,
@@ -164,6 +167,7 @@ class Application:
             contacts=self.contacts,
             outbound=self.outbound,
             history=self.history,
+            chat_directory=self.chat_directory,
             mcp=self.mcp,
         )
         self.worker = AgentWorker(

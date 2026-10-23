@@ -159,6 +159,27 @@ message_gate:
 uv run --env-file .env py-raspberry-qq-agent --config config.yaml encrypt --kind user --id 123456
 ```
 
+## 好友与群聊目录
+
+Agent 可以通过 `list_qq_friends` 和 `list_qq_groups` 查询机器人当前的好友和已加入群聊。
+两个工具都调用 NapCat 的实时 `get_friend_list` / `get_group_list` API：
+
+- 好友结果包含加密好友标识、昵称、备注和显示名称。
+- 群聊结果包含加密群标识、群名、群备注、当前人数和人数上限。
+- 不返回原始 QQ 号或群号。
+- 使用从 1 开始的 `page` 和 `page_size` 参数分页，并返回 `total`、`total_pages` 和
+  `has_more`。
+
+分页参数配置在 YAML：
+
+```yaml
+directory:
+  default_page_size: 50
+  max_page_size: 200
+```
+
+这两个查询是只读操作，不受聊天允许列表限制。
+
 ## TODO 与主 Agent
 
 消息、定时任务和定时群摘要都会进入同一份 TODO。每次唤醒时，完整 TODO 会交给主 Agent；

@@ -296,6 +296,14 @@ class NapCatClient:
             raw_messages = []
         return raw_messages if isinstance(raw_messages, list) else []
 
+    async def fetch_friend_list(self) -> list[dict[str, Any]]:
+        data = await self.call_action("get_friend_list", {})
+        return _extract_list_data(data, "friends")
+
+    async def fetch_group_list(self) -> list[dict[str, Any]]:
+        data = await self.call_action("get_group_list", {})
+        return _extract_list_data(data, "groups")
+
     def _alias_for_log(self, raw_id: str) -> str:
         if not raw_id:
             return "-"
@@ -413,3 +421,14 @@ def _strip_cq_codes(value: str) -> str:
 def _response_message_id(response: dict[str, Any]) -> str:
     value = response.get("message_id", "")
     return str(value) if value not in {None, ""} else ""
+
+
+def _extract_list_data(data: Any, label: str) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("data", label):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    raise NapCatError(f"NapCat returned invalid {label} list")

@@ -139,6 +139,9 @@ class AppConfig:
     history_content_chars: int
     history_dedupe_messages: int
 
+    directory_default_page_size: int
+    directory_max_page_size: int
+
     knowledge_max_file_bytes: int
     knowledge_max_search_results: int
     knowledge_max_read_lines: int
@@ -175,6 +178,7 @@ class AppConfig:
         digest = _section(raw, "group_digest")
         scheduler = _section(raw, "scheduler")
         history = _section(raw, "history")
+        directory = _section(raw, "directory")
         knowledge = _section(raw, "knowledge")
         mcp = _section(raw, "mcp")
         mcp_upload = _section(mcp, "upload")
@@ -308,6 +312,12 @@ class AppConfig:
             history_dedupe_messages=max(
                 1, int(history.get("dedupe_messages", 2000))
             ),
+            directory_default_page_size=max(
+                1, int(directory.get("default_page_size", 50))
+            ),
+            directory_max_page_size=max(
+                1, int(directory.get("max_page_size", 200))
+            ),
             knowledge_max_file_bytes=max(
                 1024, int(knowledge.get("max_file_bytes", 2_000_000))
             ),
@@ -345,6 +355,10 @@ class AppConfig:
             raise ConfigError("llm.max_tool_rounds must be at least 1")
         if self.max_todo_rewakes < 0:
             raise ConfigError("llm.max_todo_rewakes cannot be negative")
+        if self.directory_default_page_size > self.directory_max_page_size:
+            raise ConfigError(
+                "directory.default_page_size cannot exceed directory.max_page_size"
+            )
 
     def prepare_directories(self) -> None:
         for path in (
@@ -398,6 +412,8 @@ def _default_system_prompt() -> str:
 8. 你只能看到加密后的 QQ 用户或群标识。绝不猜测、构造或索取 QQ 号，也不要尝试还原
    真实身份。
 9. 你可以读取和修改联系人资料，但不能授予或收回 admin 权限。权限信息只读。
+    需要确认机器人加入了哪些群或有哪些好友时，调用 list_qq_groups 或
+    list_qq_friends；结果较多时按返回的 page、total_pages 和 has_more 继续分页。
 10. 每次处理完一个 TODO，必须调用 delete_todo_item 删除对应 id。若 TODO 列表仍不为空，
     系统会再次唤醒你，直到清空。
 11. 群聊总结要有信息价值。先查消息历史，写成 Markdown；若任务要求上传，先写入记事本，

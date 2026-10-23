@@ -193,6 +193,104 @@ class HistoryService:
         )[-limit:]
 
 
+class ChatDirectoryService:
+    """Read the bot's friends and joined groups without exposing raw QQ IDs."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        napcat: NapCatClient,
+        vault: ContactVault,
+    ) -> None:
+        self._config = config
+        self._napcat = napcat
+        self._vault = vault
+
+    async def friends(
+        self,
+        page: int = 1,
+        page_size: int | None = None,
+    ) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        for friend in await self._napcat.fetch_friend_list():
+            raw_id = friend.get("user_id")
+            if raw_id in {None, ""}:
+                continue
+            nickname = str(friend.get("nickname") or "")
+            remark = str(friend.get("remark") or "")
+            items.append(
+                {
+                    "encrypted_target_id": self._vault.encrypt("user", str(raw_id)),
+                    "nickname": nickname,
+                    "remark": remark,
+                    "display_name": remark or nickname,
+                }
+            )
+        items.sort(
+            key=lambda item: (
+                str(item["display_name"]).casefold(),
+                str(item["encrypted_target_id"]),
+            )
+        )
+        return self._page("friend", items, page, page_size)
+
+    async def groups(
+        self,
+        page: int = 1,
+        page_size: int | None = None,
+    ) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        for group in await self._napcat.fetch_group_list():
+            raw_id = group.get("group_id")
+            if raw_id in {None, ""}:
+                continue
+            items.append(
+                {
+                    "encrypted_target_id": self._vault.encrypt("group", str(raw_id)),
+                    "group_name": str(group.get("group_name") or ""),
+                    "group_memo": str(group.get("group_memo") or ""),
+                    "member_count": _optional_int(group.get("member_count")),
+                    "max_member_count": _optional_int(
+                        group.get("max_member_count")
+                    ),
+                }
+            )
+        items.sort(
+            key=lambda item: (
+                str(item["group_name"]).casefold(),
+                str(item["encrypted_target_id"]),
+            )
+        )
+        return self._page("group", items, page, page_size)
+
+    def _page(
+        self,
+        kind: str,
+        items: list[dict[str, Any]],
+        page: int,
+        page_size: int | None,
+    ) -> dict[str, Any]:
+        if page < 1:
+            raise ValueError("page must be at least 1")
+        size = page_size or self._config.directory_default_page_size
+        if size < 1:
+            raise ValueError("page_size must be at least 1")
+        size = min(size, self._config.directory_max_page_size)
+        total = len(items)
+        total_pages = (total + size - 1) // size if total else 0
+        start = (page - 1) * size
+        end = start + size
+        return {
+            "kind": kind,
+            "page": page,
+            "page_size": size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_more": end < total,
+            "items": items[start:end],
+        }
+
+
 def build_tool_registry(
     *,
     config: AppConfig,
@@ -202,6 +300,7 @@ def build_tool_registry(
     contacts: ContactDirectory,
     outbound: OutboundQueue,
     history: HistoryService,
+    chat_directory: ChatDirectoryService,
     mcp: McpManager,
 ) -> ToolRegistry:
     registry = ToolRegistry()
@@ -292,6 +391,54 @@ def build_tool_registry(
             handler=get_qq_message_history,
         )
     )
+
+    async def list_qq_friends(args: dict[str, Any]) -> dict[str, Any]:
+        return await chat_directory.friends(
+            page=int(args.get("page", 1)),
+            page_size=_optional_page_size(args),
+        )
+
+    async def list_qq_groups(args: dict[str, Any]) -> dict[str, Any]:
+        return await chat_directory.groups(
+            page=int(args.get("page", 1)),
+            page_size=_optional_page_size(args),
+        )
+
+    for name, description, handler in (
+        (
+            "list_qq_friends",
+            (
+                "列出机器人当前 QQ 好友。返回加密好友标识、昵称和备注，"
+                "并使用 page、page_size 分页；不要暴露原始 QQ 号。"
+            ),
+            list_qq_friends,
+        ),
+        (
+            "list_qq_groups",
+            (
+                "列出机器人当前加入的 QQ 群。返回加密群标识、群名、群备注和人数，"
+                "并使用 page、page_size 分页；不要暴露原始群号。"
+            ),
+            list_qq_groups,
+        ),
+    ):
+        registry.register(
+            Tool(
+                name=name,
+                description=description,
+                input_schema=_object_schema(
+                    {
+                        "page": {"type": "integer", "minimum": 1},
+                        "page_size": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": config.directory_max_page_size,
+                        },
+                    }
+                ),
+                handler=handler,
+            )
+        )
 
     async def get_todo_list_length(_: dict[str, Any]) -> dict[str, Any]:
         return {"length": await todos.length()}
@@ -667,6 +814,18 @@ def _parse_time_arg(value: Any, timezone: ZoneInfo) -> float | None:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone)
         return parsed.timestamp()
+
+
+def _optional_page_size(args: dict[str, Any]) -> int | None:
+    if "page_size" not in args:
+        return None
+    return int(args["page_size"])
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in {None, ""}:
+        return None
+    return int(value)
 
 
 def json_tool_result(value: Any) -> str:
