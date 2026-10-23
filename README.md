@@ -12,6 +12,8 @@
   TODO；不重要的消息不会唤醒主模型。
 - 所有群消息都会以加密发送者标识保存到本地历史，供定时群聊总结使用。未 `@` 机器人的
   群消息不会触发分类模型或主模型。
+- 可选的聊天允许列表启用后，只有列表中的私聊或列表中的群聊 `@消息` 能触发 Agent。
+  该列表也限制 `send_qq_message` 的发送目标，但不限制历史消息读取。
 - 主模型返回的普通文本不会发给 QQ。外部动作必须通过 `send_qq_message` 工具进入发送队列。
 - 发送队列由单个消费者串行处理，默认在两次发送之间等待 2 到 4 秒的随机安全间隔。
 - TODO、定时任务、群摘要游标、联系人别名和历史都持久化到磁盘，重启后不会丢失。
@@ -125,6 +127,31 @@ uv run --env-file .env py-raspberry-qq-agent --config config.yaml admin list
 `admin list` 只显示加密别名。也可以把初始管理员 QQ 填入
 `security.admin_qq_ids`，服务启动时会将其转换成加密别名后再写入角色表。该列表只存在于
 本地 YAML，不会传给 Agent。
+
+## 聊天允许列表
+
+在 `message_gate.allowlist` 中启用聊天白名单：
+
+```yaml
+message_gate:
+  allowlist:
+    enabled: true
+    private_qq_ids:
+      - 123456789
+    group_ids:
+      - 987654321
+```
+
+启用后：
+
+- 只有列表中的 QQ 私聊可以触发 Agent。
+- 只有列表中的群聊可以触发 Agent，并且消息仍需 `@机器人`。
+- 允许列表检查优先于 admin 和重要性小模型；未列出的聊天即使发送者是 admin 也不会触发。
+- `send_qq_message` 只能发往同一列表中的私聊或群聊。
+- `get_qq_message_history` 不受允许列表限制。
+
+关闭时设置 `enabled: false`，此时不会限制聊天。原始 QQ/群号保留在本地 YAML 中，Agent
+仍然只接触加密别名。
 
 查看某个 QQ 或群号对应的 Agent 可见标识：
 

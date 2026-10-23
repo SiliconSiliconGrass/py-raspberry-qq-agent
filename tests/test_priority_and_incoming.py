@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from py_raspberry_qq_agent.allowlist import ChatAllowlist
 from py_raspberry_qq_agent.config import AppConfig
 from py_raspberry_qq_agent.contacts import ContactDirectory, ContactVault, RoleStore
 from py_raspberry_qq_agent.incoming import IncomingService
@@ -53,9 +54,16 @@ def _services(
     contacts = ContactDirectory(config.data_dir / "profiles.json")
     messages = MessageStore(config.data_dir / "messages.jsonl")
     todos = TodoStore(config.data_dir / "todos.json")
+    allowlist = ChatAllowlist(
+        enabled=config.allowlist_enabled,
+        private_qq_ids=config.allowlist_private_qq_ids,
+        group_ids=config.allowlist_group_ids,
+        vault=vault,
+    )
     gate = ImportanceGate(
         config,
         classifier,  # type: ignore[arg-type]
+        allowlist,
         roles,
         contacts,
         messages,
@@ -136,5 +144,60 @@ async def test_unmentioned_group_message_skips_classifier(config: AppConfig) -> 
     message.raw_chat_id = "30001"
 
     await incoming.handle(message)
+    assert classifier.calls == 0
+    assert await todos.length() == 0
+
+
+@pytest.mark.asyncio
+async def test_allowlist_overrides_admin_for_unlisted_private_chat(
+    config: AppConfig,
+) -> None:
+    config.allowlist_enabled = True
+    config.allowlist_private_qq_ids = ["20010"]
+    classifier = FakeClassifier(important=True)
+    incoming, todos, vault, roles, notifications = _services(config, classifier)
+    admin_alias = vault.encrypt("user", "20011")
+    roles.set_admin(admin_alias, True)
+
+    await incoming.handle(_message("20011", "please help", "m10"))
+
+    assert classifier.calls == 0
+    assert await todos.length() == 0
+    assert notifications[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_private_chat_uses_normal_importance_flow(
+    config: AppConfig,
+) -> None:
+    config.allowlist_enabled = True
+    config.allowlist_private_qq_ids = ["20012"]
+    classifier = FakeClassifier(important=True)
+    incoming, todos, _, _, notifications = _services(config, classifier)
+
+    await incoming.handle(_message("20012", "please help", "m11"))
+
+    assert classifier.calls == 1
+    assert await todos.length() == 1
+    assert notifications[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_allowlist_checks_group_id_before_mention_or_admin(
+    config: AppConfig,
+) -> None:
+    config.allowlist_enabled = True
+    config.allowlist_group_ids = ["30012"]
+    classifier = FakeClassifier(important=True)
+    incoming, todos, vault, roles, _ = _services(config, classifier)
+    admin_alias = vault.encrypt("user", "20013")
+    roles.set_admin(admin_alias, True)
+    message = _message("20013", "@bot please help", "m12")
+    message.chat_type = "group"
+    message.raw_chat_id = "30013"
+    message.mentioned_bot = True
+
+    await incoming.handle(message)
+
     assert classifier.calls == 0
     assert await todos.length() == 0

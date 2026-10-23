@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from .allowlist import ChatAllowlist
 from .config import AppConfig
 from .contacts import ContactDirectory, RoleStore
 from .llm import LlmError, OpenAICompatibleClient, extract_json_object
@@ -27,12 +28,14 @@ class ImportanceGate:
         self,
         config: AppConfig,
         classifier: OpenAICompatibleClient,
+        allowlist: ChatAllowlist,
         roles: RoleStore,
         contacts: ContactDirectory,
         messages: MessageStore,
     ) -> None:
         self._config = config
         self._classifier = classifier
+        self._allowlist = allowlist
         self._roles = roles
         self._contacts = contacts
         self._messages = messages
@@ -46,6 +49,8 @@ class ImportanceGate:
         content: str,
         mentioned_bot: bool,
     ) -> ImportanceDecision:
+        if not self._allowlist.allows(chat_type, encrypted_chat_id):
+            return ImportanceDecision(False, "聊天不在启用中的允许列表", "allowlist")
         if chat_type == "group" and not mentioned_bot:
             return ImportanceDecision(False, "群消息没有 @ 机器人", "routing")
         if chat_type == "private" and not self._config.private_enabled:

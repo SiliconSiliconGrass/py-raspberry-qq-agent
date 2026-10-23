@@ -115,6 +115,9 @@ class AppConfig:
 
     private_enabled: bool
     group_mention_enabled: bool
+    allowlist_enabled: bool
+    allowlist_private_qq_ids: list[str]
+    allowlist_group_ids: list[str]
     classifier_context_messages: int
     outbound_queue_size: int
     outbound_min_interval_seconds: float
@@ -195,6 +198,7 @@ class AppConfig:
             "llm.classifier",
             parent_key=main_llm.api_key,
         )
+        allowlist = _section(gate, "allowlist")
 
         min_interval = float(gate.get("outbound_min_interval_seconds", 2))
         max_interval = float(gate.get("outbound_max_interval_seconds", 4))
@@ -255,6 +259,17 @@ class AppConfig:
             group_mention_enabled=_as_bool(
                 gate.get("group_mention_enabled", True), True
             ),
+            allowlist_enabled=_as_bool(allowlist.get("enabled", False)),
+            allowlist_private_qq_ids=[
+                str(item).strip()
+                for item in allowlist.get("private_qq_ids", [])
+                if str(item).strip()
+            ],
+            allowlist_group_ids=[
+                str(item).strip()
+                for item in allowlist.get("group_ids", [])
+                if str(item).strip()
+            ],
             classifier_context_messages=int(
                 gate.get("classifier_context_messages", 12)
             ),

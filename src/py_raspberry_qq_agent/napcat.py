@@ -13,6 +13,7 @@ from typing import Any
 
 from websockets.asyncio.client import ClientConnection, connect
 
+from .allowlist import ChatAllowlist
 from .config import AppConfig
 from .contacts import ContactVault
 from .messages import MessageStore
@@ -308,11 +309,13 @@ class OutboundQueue:
         config: AppConfig,
         vault: ContactVault,
         napcat: NapCatClient,
+        allowlist: ChatAllowlist,
         messages: MessageStore | None = None,
     ) -> None:
         self._config = config
         self._vault = vault
         self._napcat = napcat
+        self._allowlist = allowlist
         self._messages = messages
         self._queue: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue(
             maxsize=config.outbound_queue_size
@@ -340,6 +343,8 @@ class OutboundQueue:
         expected_kind = "user" if chat_type == "private" else "group"
         if kind != expected_kind:
             raise ValueError("encrypted target does not match chat_type")
+        if not self._allowlist.allows(chat_type, encrypted_target_id):
+            raise PermissionError("chat is not in the enabled allowlist")
         if not content.strip():
             raise ValueError("message content cannot be empty")
         if self._queue.full():
@@ -359,6 +364,8 @@ class OutboundQueue:
                     wait_for = self._last_sent_at + interval - loop.time()
                     if wait_for > 0:
                         await asyncio.sleep(wait_for)
+                if not self._allowlist.allows(chat_type, encrypted_id):
+                    raise PermissionError("chat is not in the enabled allowlist")
                 kind, raw_target = self._vault.resolve(encrypted_id)
                 if chat_type == "group":
                     if kind != "group":

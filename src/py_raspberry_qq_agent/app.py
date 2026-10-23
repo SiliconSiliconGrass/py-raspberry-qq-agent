@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from .agent import AgentRunner, AgentWorker
+from .allowlist import ChatAllowlist
 from .config import AppConfig
 from .contacts import ContactDirectory, ContactVault, RoleStore
 from .digest import GroupDigestService
@@ -37,6 +38,7 @@ class Application:
     mcp: McpManager
     napcat: NapCatClient
     outbound: OutboundQueue
+    allowlist: ChatAllowlist
     history: HistoryService
     incoming: IncomingService
     digest: GroupDigestService
@@ -75,6 +77,25 @@ class Application:
             config.classifier_llm, retry_count=config.classifier_llm.retry_count
         )
         mcp = McpManager(config)
+        allowlist = ChatAllowlist(
+            enabled=config.allowlist_enabled,
+            private_qq_ids=config.allowlist_private_qq_ids,
+            group_ids=config.allowlist_group_ids,
+            vault=vault,
+        )
+        if config.allowlist_enabled:
+            LOGGER.info(
+                "chat allowlist enabled private=%d groups=%d",
+                len(config.allowlist_private_qq_ids),
+                len(config.allowlist_group_ids),
+            )
+            if not (
+                config.allowlist_private_qq_ids or config.allowlist_group_ids
+            ):
+                LOGGER.warning(
+                    "chat allowlist is enabled but empty; all chat triggers and sends "
+                    "will be blocked"
+                )
 
         worker_ref: dict[str, AgentWorker | None] = {"worker": None}
 
@@ -89,8 +110,10 @@ class Application:
             await incoming.handle(message)
 
         napcat = NapCatClient(config, on_napcat_message)
-        outbound = OutboundQueue(config, vault, napcat, messages)
-        gate = ImportanceGate(config, classifier_llm, roles, contacts, messages)
+        outbound = OutboundQueue(config, vault, napcat, allowlist, messages)
+        gate = ImportanceGate(
+            config, classifier_llm, allowlist, roles, contacts, messages
+        )
         history = HistoryService(config, messages, napcat, vault)
         incoming = IncomingService(
             vault=vault,
@@ -123,6 +146,7 @@ class Application:
             mcp=mcp,
             napcat=napcat,
             outbound=outbound,
+            allowlist=allowlist,
             history=history,
             incoming=incoming,
             digest=digest,
