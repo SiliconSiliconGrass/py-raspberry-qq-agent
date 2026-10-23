@@ -1,0 +1,114 @@
+app:
+  timezone: Asia/Shanghai
+  data_dir: ./data
+  knowledge_dir: ./knowledge
+  notebook_dir: ./notebooks
+
+logging:
+  level: INFO
+  file: ./logs/agent.log
+  max_bytes: 10000000
+  backup_count: 5
+  json: ${LOG_JSON:-false}
+
+llm:
+  main:
+    base_url: ${LLM_BASE_URL:-https://api.openai.com/v1}
+    api_key: ${LLM_API_KEY}
+    model: ${LLM_MODEL:-gpt-4.1-mini}
+    temperature: 0.3
+    max_tokens: 4096
+    timeout_seconds: 120
+    retry_count: 2
+    # Provider-specific reasoning switch. Examples:
+    # OpenAI-compatible: {reasoning_effort: medium}
+    # DeepSeek-compatible: {thinking: {type: enabled}}
+    extra_body: {}
+  classifier:
+    base_url: ${CLASSIFIER_BASE_URL:-https://api.openai.com/v1}
+    api_key: ${CLASSIFIER_API_KEY:-}
+    model: ${CLASSIFIER_MODEL:-gpt-4.1-nano}
+    temperature: 0
+    max_tokens: 300
+    timeout_seconds: 30
+    retry_count: 1
+    extra_body: {}
+  max_tool_rounds: 12
+  tool_timeout_seconds: 120
+  max_todo_rewakes: 4
+  conversation_messages: 30
+  prompt:
+    # Empty means use the built-in policy prompt.
+    system: ""
+    time_tool: true
+
+napcat:
+  ws_url: ${NAPCAT_WS_URL:-ws://127.0.0.1:3001}
+  access_token: ${NAPCAT_ACCESS_TOKEN:-}
+  reconnect_seconds: 5
+  request_timeout_seconds: 30
+
+security:
+  # Required. Generate once and keep stable: it is the contact encryption key.
+  # Example: openssl rand -base64 48
+  encryption_key: ${QQ_ID_ENCRYPTION_KEY}
+  # QQs listed here are granted admin on every startup. Prefer:
+  # uv run py-raspberry-qq-agent --config config.yaml admin add --qq 123456
+  admin_qq_ids: []
+
+message_gate:
+  private_enabled: true
+  group_mention_enabled: true
+  classifier_fail_closed: true
+  classifier_min_confidence: 0.65
+  classifier_context_messages: 12
+  classifier_message_chars: 4000
+  classifier_context_chars: 1200
+  outbound_queue_size: 256
+  outbound_min_interval_seconds: 2
+  outbound_max_interval_seconds: 4
+  outbound_send_timeout_seconds: 30
+
+group_digest:
+  enabled: false
+  # Raw group IDs stay inside the gateway; the agent receives encrypted group aliases.
+  groups: []
+  interval_minutes: 60
+  initial_lookback_minutes: 60
+  min_messages: 1
+  prompt: "整理这段时间内有价值的群聊讨论，忽略寒暄、重复和灌水。"
+
+scheduler:
+  enabled: true
+  tick_seconds: 1
+
+history:
+  limit: 80
+  max_fetch: 500
+  content_chars: 12000
+  dedupe_messages: 2000
+
+knowledge:
+  max_file_bytes: 2000000
+  max_search_results: 50
+  max_read_lines: 400
+
+mcp:
+  enabled: ${MCP_ENABLED:-false}
+  upload:
+    endpoint: ${MCP_UPLOAD_ENDPOINT:-}
+    api_token: ${MCP_UPLOAD_API_TOKEN:-}
+    timeout_seconds: 60
+    headers: {}
+  servers:
+    items:
+      - name: upload
+        transport: stdio
+        command: uv
+        args:
+          - run
+          - qq-agent-upload-mcp
+          - --config
+          - config.yaml
+        allowed_tools:
+          - upload_markdown
