@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 from .agent import AgentRunner, AgentWorker
 from .allowlist import ChatAllowlist
@@ -9,6 +10,8 @@ from .config import AppConfig
 from .contacts import ContactDirectory, RoleStore
 from .digest import GroupDigestService
 from .incoming import IncomingService
+from .guild import DueReminders, GuildRepository, WindowPoller
+from .keycloak import KeycloakDirectory
 from .knowledge import KnowledgeBase
 from .llm import OpenAICompatibleClient
 from .logging_setup import configure_logging
@@ -44,6 +47,8 @@ class Application:
     digest: GroupDigestService
     worker: AgentWorker | None = None
     scheduler: Scheduler | None = None
+    identities: KeycloakDirectory | None = None
+    due_poller: WindowPoller | None = None
 
     @classmethod
     def build(cls, config: AppConfig) -> Application:
@@ -86,9 +91,7 @@ class Application:
                 len(config.allowlist_private_qq_ids),
                 len(config.allowlist_group_ids),
             )
-            if not (
-                config.allowlist_private_qq_ids or config.allowlist_group_ids
-            ):
+            if not (config.allowlist_private_qq_ids or config.allowlist_group_ids):
                 LOGGER.warning(
                     "chat allowlist is enabled but empty; all chat triggers and sends "
                     "will be blocked"
@@ -168,6 +171,24 @@ class Application:
             self.scheduler.start()
         self.digest.start()
         self.napcat.start()
+        if self.config.guild.enabled:
+            self.identities = KeycloakDirectory(self.config.keycloak)
+            repository = GuildRepository(self.config.guild.database_url)
+            if self.config.guild.due_enabled:
+                reminders = DueReminders(
+                    self.config.guild,
+                    repository,
+                    self.identities,
+                    self.outbound,
+                    ZoneInfo(self.config.timezone),
+                )
+                self.due_poller = WindowPoller(
+                    repository,
+                    self.config.guild.poll_seconds,
+                    reminders.check,
+                    "guild-due",
+                )
+                self.due_poller.start()
         LOGGER.info(
             "application started timezone=%s tools=%d",
             self.config.timezone,
@@ -180,20 +201,19 @@ class Application:
         item = await self.tasks.add(
             content=f"处理定时任务：{task.content}",
             source="scheduler",
-            context=(
-                f"标题：{task.title}\n"
-                f"任务：{task.content}\n"
-            ),
+            context=(f"标题：{task.title}\n任务：{task.content}\n"),
             chat_type=task.chat_type,
             target_id=task.target_id,
             metadata={"kind": "scheduled_task", "task_id": task.id},
         )
-        LOGGER.info(
-            "scheduled agent task queued id=%s schedule=%s", item.id, task.id
-        )
+        LOGGER.info("scheduled agent task queued id=%s schedule=%s", item.id, task.id)
 
     async def stop(self) -> None:
         LOGGER.info("application stopping")
+        if self.due_poller:
+            await self.due_poller.stop()
+        if self.identities:
+            await self.identities.close()
         await self.napcat.stop()
         await self.digest.stop()
         if self.scheduler is not None and self.config.scheduler_enabled:

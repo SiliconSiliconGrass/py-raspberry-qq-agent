@@ -119,3 +119,19 @@ mcp:
           - config.yaml
         allowed_tools:
           - upload_markdown
+
+keycloak:
+  issuer: ${OIDC_ISSUER:-}
+  admin_url: ${KEYCLOAK_ADMIN_URL:-}
+  client_id: ${BOT_KEYCLOAK_CLIENT_ID:-}
+  client_secret: ${BOT_KEYCLOAK_CLIENT_SECRET:-}
+  qq_attribute: qq_number
+
+guild:
+  enabled: false
+  database_url: ${GUILD_DATABASE_URL:-}
+  public_url: ${GUILD_PUBLIC_URL:-}
+  poll_seconds: 60
+  due_reminder:
+    enabled: true
+    advance_hours: 24

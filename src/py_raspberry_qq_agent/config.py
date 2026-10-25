@@ -8,6 +8,9 @@ from typing import Any
 
 import yaml
 
+from .guild import GuildConfig
+from .keycloak import KeycloakConfig
+
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
@@ -17,6 +20,7 @@ class ConfigError(ValueError):
 
 def _expand_env(value: Any) -> Any:
     if isinstance(value, str):
+
         def replace(match: re.Match[str]) -> str:
             env_value = os.environ.get(match.group(1))
             if env_value:
@@ -108,6 +112,9 @@ class AppConfig:
     napcat_reconnect_seconds: float
     napcat_request_timeout_seconds: float
 
+    keycloak: KeycloakConfig
+    guild: GuildConfig
+
     admin_qq_ids: list[str]
 
     private_enabled: bool
@@ -172,6 +179,9 @@ class AppConfig:
         llm = _section(raw, "llm")
         napcat = _section(raw, "napcat")
         security = _section(raw, "security")
+        keycloak = _section(raw, "keycloak")
+        guild = _section(raw, "guild")
+        due = _section(guild, "due_reminder")
         gate = _section(raw, "message_gate")
         digest = _section(raw, "group_digest")
         scheduler = _section(raw, "scheduler")
@@ -192,7 +202,9 @@ class AppConfig:
 
             ZoneInfo(timezone_name)
         except Exception as exc:
-            raise ConfigError(f"app.timezone {timezone_name!r} is invalid: {exc}") from exc
+            raise ConfigError(
+                f"app.timezone {timezone_name!r} is invalid: {exc}"
+            ) from exc
 
         main_llm = _llm_config(_section(llm, "main"), "llm.main")
         classifier_llm = _llm_config(
@@ -209,7 +221,9 @@ class AppConfig:
                 "message_gate outbound intervals must satisfy 0 <= min <= max"
             )
         if not 0 <= float(gate.get("classifier_min_confidence", 0.65)) <= 1:
-            raise ConfigError("message_gate.classifier_min_confidence must be in [0, 1]")
+            raise ConfigError(
+                "message_gate.classifier_min_confidence must be in [0, 1]"
+            )
 
         config = cls(
             config_path=config_path,
@@ -248,6 +262,15 @@ class AppConfig:
             napcat_reconnect_seconds=float(napcat.get("reconnect_seconds", 5)),
             napcat_request_timeout_seconds=float(
                 napcat.get("request_timeout_seconds", 30)
+            ),
+            keycloak=KeycloakConfig(**keycloak),
+            guild=GuildConfig(
+                enabled=_as_bool(guild.get("enabled", False)),
+                database_url=str(guild.get("database_url", "")),
+                public_url=str(guild.get("public_url", "")),
+                poll_seconds=float(guild.get("poll_seconds", 60)),
+                due_enabled=_as_bool(due.get("enabled", True), True),
+                advance_hours=float(due.get("advance_hours", 24)),
             ),
             admin_qq_ids=[
                 str(item).strip()
@@ -297,32 +320,22 @@ class AppConfig:
                 )
             ),
             scheduler_enabled=_as_bool(scheduler.get("enabled", True), True),
-            scheduler_tick_seconds=max(
-                0.2, float(scheduler.get("tick_seconds", 1))
-            ),
+            scheduler_tick_seconds=max(0.2, float(scheduler.get("tick_seconds", 1))),
             history_limit=max(1, int(history.get("limit", 80))),
             history_max_fetch=max(1, int(history.get("max_fetch", 500))),
-            history_content_chars=max(
-                100, int(history.get("content_chars", 12000))
-            ),
-            history_dedupe_messages=max(
-                1, int(history.get("dedupe_messages", 2000))
-            ),
+            history_content_chars=max(100, int(history.get("content_chars", 12000))),
+            history_dedupe_messages=max(1, int(history.get("dedupe_messages", 2000))),
             directory_default_page_size=max(
                 1, int(directory.get("default_page_size", 50))
             ),
-            directory_max_page_size=max(
-                1, int(directory.get("max_page_size", 200))
-            ),
+            directory_max_page_size=max(1, int(directory.get("max_page_size", 200))),
             knowledge_max_file_bytes=max(
                 1024, int(knowledge.get("max_file_bytes", 2_000_000))
             ),
             knowledge_max_search_results=max(
                 1, int(knowledge.get("max_search_results", 50))
             ),
-            knowledge_max_read_lines=max(
-                1, int(knowledge.get("max_read_lines", 400))
-            ),
+            knowledge_max_read_lines=max(1, int(knowledge.get("max_read_lines", 400))),
             mcp_enabled=_as_bool(mcp.get("enabled", False)),
             mcp_servers=_section(mcp, "servers").get("items", [])
             if isinstance(_section(mcp, "servers").get("items", []), list)
@@ -333,14 +346,30 @@ class AppConfig:
                 str(key): str(value)
                 for key, value in (mcp_upload.get("headers") or {}).items()
             },
-            mcp_upload_timeout_seconds=float(
-                mcp_upload.get("timeout_seconds", 60)
-            ),
+            mcp_upload_timeout_seconds=float(mcp_upload.get("timeout_seconds", 60)),
         )
         config.validate()
         return config
 
     def validate(self) -> None:
+        if self.guild.enabled:
+            if not self.guild.database_url:
+                raise ConfigError("guild.database_url is required")
+            if self.guild.poll_seconds <= 0 or self.guild.advance_hours <= 0:
+                raise ConfigError(
+                    "guild poll_seconds and advance_hours must be positive"
+                )
+            if not all(
+                (
+                    self.keycloak.issuer,
+                    self.keycloak.admin_url,
+                    self.keycloak.client_id,
+                    self.keycloak.client_secret,
+                )
+            ):
+                raise ConfigError(
+                    "keycloak issuer, admin_url, client_id and client_secret are required for guild"
+                )
         if self.outbound_min_interval_seconds < 0:
             raise ConfigError("outbound minimum interval cannot be negative")
         if not self.main_llm.api_key:
