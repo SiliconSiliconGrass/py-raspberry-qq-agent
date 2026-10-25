@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from .guild import GuildConfig
+from .guild import GuildConfig, WeeklyReportConfig
 from .keycloak import KeycloakConfig
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -182,6 +182,7 @@ class AppConfig:
         keycloak = _section(raw, "keycloak")
         guild = _section(raw, "guild")
         due = _section(guild, "due_reminder")
+        weekly = _section(guild, "weekly_report")
         gate = _section(raw, "message_gate")
         digest = _section(raw, "group_digest")
         scheduler = _section(raw, "scheduler")
@@ -271,6 +272,18 @@ class AppConfig:
                 poll_seconds=float(guild.get("poll_seconds", 60)),
                 due_enabled=_as_bool(due.get("enabled", True), True),
                 advance_hours=float(due.get("advance_hours", 24)),
+                weekly=WeeklyReportConfig(
+                    enabled=_as_bool(weekly.get("enabled", True), True),
+                    schedule=_section(weekly, "schedule"),
+                    directory=str(weekly.get("directory", "guild-reports")),
+                    prompt=str(
+                        weekly.get(
+                            "prompt",
+                            "总结任务进展、协作讨论、未完成事项和需要关注的问题。",
+                        )
+                    ),
+                    upload_tool=str(weekly.get("upload_tool", "")),
+                ),
             ),
             admin_qq_ids=[
                 str(item).strip()
@@ -370,6 +383,25 @@ class AppConfig:
                 raise ConfigError(
                     "keycloak issuer, admin_url, client_id and client_secret are required for guild"
                 )
+        if self.guild.weekly.schedule:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            from .scheduler import compute_next_run
+
+            if self.guild.weekly.schedule.get("kind") != "weekly":
+                raise ConfigError("guild.weekly_report.schedule.kind must be weekly")
+            try:
+                compute_next_run(
+                    self.guild.weekly.schedule,
+                    datetime.now(ZoneInfo("Asia/Shanghai")),
+                    ZoneInfo("Asia/Shanghai"),
+                )
+            except (ValueError, TypeError) as exc:
+                raise ConfigError(
+                    f"invalid guild.weekly_report.schedule: {exc}"
+                ) from exc
+        if not self.guild.weekly.directory.strip():
+            raise ConfigError("guild.weekly_report.directory cannot be empty")
         if self.outbound_min_interval_seconds < 0:
             raise ConfigError("outbound minimum interval cannot be negative")
         if not self.main_llm.api_key:

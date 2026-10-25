@@ -20,7 +20,11 @@ async def summarize(llm: OpenAICompatibleClient, prompt: str, data: Any) -> str:
                 "role": "user",
                 "content": prompt
                 + "\n"
-                + json.dumps(ModelIds().encode(data), ensure_ascii=False),
+                + json.dumps(
+                    ModelIds().encode(data),
+                    ensure_ascii=False,
+                    default=lambda value: value.isoformat(),
+                ),
             },
         ]
     )

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import signal
+from datetime import datetime
 from pathlib import Path
 
 from .app import Application
@@ -24,14 +25,16 @@ def main() -> None:
 
     subparsers.add_parser("run", help="Run the QQ agent")
     subparsers.add_parser("config-check", help="Validate the configuration")
+    report = subparsers.add_parser(
+        "guild-report", help="Generate last full week as Markdown without starting QQ"
+    )
+    report.add_argument("--at", help="ISO 8601 generation time; default now (UTC+8)")
 
     admin = subparsers.add_parser("admin", help="Manage admin authorization")
     admin_sub = admin.add_subparsers(dest="admin_action", required=True)
     add_parser = admin_sub.add_parser("add", help="Grant admin to a QQ number")
     add_parser.add_argument("--qq", required=True)
-    remove_parser = admin_sub.add_parser(
-        "remove", help="Revoke admin from a QQ number"
-    )
+    remove_parser = admin_sub.add_parser("remove", help="Revoke admin from a QQ number")
     remove_parser.add_argument("--qq", required=True)
     admin_sub.add_parser("list", help="List admin QQ numbers")
 
@@ -64,6 +67,11 @@ def main() -> None:
     if command == "config-check":
         configure_logging(config)
         print(f"configuration OK: {config.config_path}")
+        return
+    if command == "guild-report":
+        if not config.guild.enabled:
+            parser.error("guild-report requires guild.enabled=true")
+        asyncio.run(_guild_report(config, args.at))
         return
     if command == "admin":
         configure_logging(config)
@@ -110,6 +118,38 @@ def main() -> None:
         asyncio.run(_run(config))
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("interrupted")
+
+
+async def _guild_report(config: AppConfig, at: str | None) -> None:
+    from .guild import GuildRepository
+    from .guild_reports import REPORT_TIMEZONE, WeeklyReports
+    from .keycloak import KeycloakDirectory
+    from .knowledge import KnowledgeBase
+    from .llm import OpenAICompatibleClient
+    from .mcp_runtime import McpManager
+
+    instant = datetime.fromisoformat(at) if at else datetime.now(REPORT_TIMEZONE)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=REPORT_TIMEZONE)
+    directory = KeycloakDirectory(config.keycloak)
+    llm = OpenAICompatibleClient(config.main_llm)
+    mcp = McpManager(config)
+    try:
+        await mcp.start()
+        report = WeeklyReports(
+            config,
+            GuildRepository(config.guild.database_url),
+            directory,
+            llm,
+            KnowledgeBase(config.knowledge_dir, config.notebook_dir),
+            mcp,
+        )
+        path = await report.generate(instant)
+        print(config.notebook_dir / path)
+    finally:
+        await mcp.stop()
+        await directory.close()
+        await llm.close()
 
 
 async def _run(config: AppConfig) -> None:

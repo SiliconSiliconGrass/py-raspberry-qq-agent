@@ -135,3 +135,11 @@ guild:
   due_reminder:
     enabled: true
     advance_hours: 24
+  weekly_report:
+    enabled: true
+    # UTC+8. Empty means no automatic run until a time is chosen.
+    # Example: {kind: weekly, weekdays: [mon], time: "09:00"}
+    schedule: {}
+    directory: guild-reports
+    prompt: "总结任务进展、协作讨论、未完成事项和需要关注的问题。"
+    upload_tool: ""

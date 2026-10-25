@@ -144,3 +144,24 @@ uv run python -m compileall -q src
 首次启动只建立当前时间游标，停机期间不补发。查询失败保留游标；身份解析或发送失败只记日志。
 已经到期的任务不提醒。窗口内才新建、但提醒触发时间已经过去的任务也不补发。
 通知仍受 QQ 发送允许列表限制，绑定 QQ 并不保证 NapCat 能向该账号私聊。
+
+## 看板周报
+
+周报统计上一个完整自然周：UTC+8 的周一 00:00 至下周一 00:00，右边界不包含。
+汇总全看板的周内新增、完成、评论，以及生成时的当前未完成/逾期状态。
+计数由代码生成，模型负责整理文字。使用现有时间字段，不推断已经删除的内容或丢失的修改历史；
+任务重新打开后，原来的完成记录也无法从当前表恢复。当前负责人和当前状态均不声称是历史快照。
+
+`guild.weekly_report.schedule` 默认为空，不会擅自选择生成时间。
+填写如 `{kind: weekly, weekdays: [mon], time: "09:00"}` 后才会自动运行。
+`directory` 是记事本内的输出目录，文件按统计周的起始日期命名，重复生成会覆盖同一文件。
+`upload_tool` 可指定已有的 MCP Markdown 上传工具；以后也可以直接扩展 `reports.publish`。
+
+可以单独生成上一完整自然周，无须连接或启动 QQ：
+
+```bash
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml guild-report
+uv run --env-file .env py-raspberry-qq-agent --config config.yaml guild-report --at 2026-10-26T09:00:00+08:00
+```
+
+命令需要启用并配置 `guild`。自动周报生成/上传失败只记日志，等待下次计划，不持久化进度或补做。

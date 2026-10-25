@@ -12,6 +12,7 @@ from .digest import GroupDigestService
 from .incoming import IncomingService
 from .guild import DueReminders, GuildRepository, WindowPoller
 from .keycloak import KeycloakDirectory
+from .guild_reports import WeeklyReports
 from .knowledge import KnowledgeBase
 from .llm import OpenAICompatibleClient
 from .logging_setup import configure_logging
@@ -49,6 +50,7 @@ class Application:
     scheduler: Scheduler | None = None
     identities: KeycloakDirectory | None = None
     due_poller: WindowPoller | None = None
+    weekly_reports: WeeklyReports | None = None
 
     @classmethod
     def build(cls, config: AppConfig) -> Application:
@@ -174,6 +176,15 @@ class Application:
         if self.config.guild.enabled:
             self.identities = KeycloakDirectory(self.config.keycloak)
             repository = GuildRepository(self.config.guild.database_url)
+            self.weekly_reports = WeeklyReports(
+                self.config,
+                repository,
+                self.identities,
+                self.main_llm,
+                self.knowledge,
+                self.mcp,
+            )
+            self.weekly_reports.start()
             if self.config.guild.due_enabled:
                 reminders = DueReminders(
                     self.config.guild,
@@ -212,6 +223,8 @@ class Application:
         LOGGER.info("application stopping")
         if self.due_poller:
             await self.due_poller.stop()
+        if self.weekly_reports:
+            await self.weekly_reports.stop()
         if self.identities:
             await self.identities.close()
         await self.napcat.stop()

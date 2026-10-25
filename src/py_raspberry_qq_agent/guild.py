@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING
 
@@ -19,6 +19,15 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
+class WeeklyReportConfig:
+    enabled: bool = True
+    schedule: dict[str, Any] = field(default_factory=dict)
+    directory: str = "guild-reports"
+    prompt: str = "总结任务进展、协作讨论、未完成事项和需要关注的问题。"
+    upload_tool: str = ""
+
+
+@dataclass(slots=True)
 class GuildConfig:
     enabled: bool = False
     database_url: str = ""
@@ -26,6 +35,7 @@ class GuildConfig:
     poll_seconds: float = 60
     due_enabled: bool = True
     advance_hours: float = 24
+    weekly: WeeklyReportConfig = field(default_factory=WeeklyReportConfig)
 
 
 class GuildRepository:
