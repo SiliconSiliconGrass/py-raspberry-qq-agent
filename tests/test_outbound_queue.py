@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from py_raspberry_qq_agent.allowlist import ChatAllowlist
-from py_raspberry_qq_agent.contacts import ContactVault
 from py_raspberry_qq_agent.napcat import OutboundQueue
 
 
@@ -32,16 +31,14 @@ async def test_outbound_queue_enforces_send_interval(tmp_path: Path) -> None:
         outbound_min_interval_seconds=0.04,
         outbound_max_interval_seconds=0.04,
     )
-    vault = ContactVault(tmp_path / "contacts.json", "secret")
-    alias = vault.encrypt("user", "12345")
+    alias = "12345"
     napcat = RecordingNapCat()
     allowlist = ChatAllowlist(
         enabled=False,
         private_qq_ids=[],
         group_ids=[],
-        vault=vault,
     )
-    queue = OutboundQueue(config, vault, napcat, allowlist)  # type: ignore[arg-type]
+    queue = OutboundQueue(config, napcat, allowlist)  # type: ignore[arg-type]
 
     queue.start()
     queue.enqueue("private", alias, "first")
@@ -59,17 +56,15 @@ def test_outbound_queue_rejects_unlisted_target(tmp_path: Path) -> None:
         outbound_min_interval_seconds=0,
         outbound_max_interval_seconds=0,
     )
-    vault = ContactVault(tmp_path / "contacts.json", "secret")
-    allowed_alias = vault.encrypt("user", "12345")
-    blocked_alias = vault.encrypt("user", "54321")
+    allowed_alias = "12345"
+    blocked_alias = "54321"
     allowlist = ChatAllowlist(
         enabled=True,
         private_qq_ids=["12345"],
         group_ids=[],
-        vault=vault,
     )
     queue = OutboundQueue(
-        config, vault, RecordingNapCat(), allowlist  # type: ignore[arg-type]
+        config, RecordingNapCat(), allowlist  # type: ignore[arg-type]
     )
 
     queue.enqueue("private", allowed_alias, "allowed")

@@ -31,9 +31,7 @@ llm:
     api_key: classifier-key
     model: classifier-model
   max_tool_rounds: 3
-  max_todo_rewakes: 2
 security:
-  encryption_key: test-encryption-secret
   admin_qq_ids: []
 message_gate:
   outbound_min_interval_seconds: 0

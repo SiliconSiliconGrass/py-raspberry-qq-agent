@@ -15,7 +15,6 @@ from websockets.asyncio.client import ClientConnection, connect
 
 from .allowlist import ChatAllowlist
 from .config import AppConfig
-from .contacts import ContactVault
 from .messages import MessageStore
 
 LOGGER = logging.getLogger(__name__)
@@ -315,13 +314,11 @@ class OutboundQueue:
     def __init__(
         self,
         config: AppConfig,
-        vault: ContactVault,
         napcat: NapCatClient,
         allowlist: ChatAllowlist,
         messages: MessageStore | None = None,
     ) -> None:
         self._config = config
-        self._vault = vault
         self._napcat = napcat
         self._allowlist = allowlist
         self._messages = messages
@@ -344,25 +341,23 @@ class OutboundQueue:
                 pass
             self._worker = None
 
-    def enqueue(self, chat_type: str, encrypted_target_id: str, content: str) -> None:
+    def enqueue(self, chat_type: str, target_id: str, content: str) -> None:
         if chat_type not in {"private", "group"}:
             raise ValueError("chat_type must be private or group")
-        kind, _ = self._vault.resolve(encrypted_target_id)
-        expected_kind = "user" if chat_type == "private" else "group"
-        if kind != expected_kind:
-            raise ValueError("encrypted target does not match chat_type")
-        if not self._allowlist.allows(chat_type, encrypted_target_id):
+        if not target_id.isdecimal():
+            raise ValueError("target_id must be a QQ number")
+        if not self._allowlist.allows(chat_type, target_id):
             raise PermissionError("chat is not in the enabled allowlist")
         if not content.strip():
             raise ValueError("message content cannot be empty")
         if self._queue.full():
             raise RuntimeError("outbound message queue is full")
-        self._queue.put_nowait((chat_type, encrypted_target_id, content))
+        self._queue.put_nowait((chat_type, target_id, content))
 
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
         while True:
-            chat_type, encrypted_id, content = await self._queue.get()
+            chat_type, target_id, content = await self._queue.get()
             try:
                 if self._last_sent_at is not None:
                     interval = random.uniform(
@@ -372,23 +367,18 @@ class OutboundQueue:
                     wait_for = self._last_sent_at + interval - loop.time()
                     if wait_for > 0:
                         await asyncio.sleep(wait_for)
-                if not self._allowlist.allows(chat_type, encrypted_id):
+                if not self._allowlist.allows(chat_type, target_id):
                     raise PermissionError("chat is not in the enabled allowlist")
-                kind, raw_target = self._vault.resolve(encrypted_id)
                 if chat_type == "group":
-                    if kind != "group":
-                        raise ValueError("group alias expected")
-                    response = await self._napcat.send_group(raw_target, content)
+                    response = await self._napcat.send_group(target_id, content)
                 else:
-                    if kind != "user":
-                        raise ValueError("private user alias expected")
-                    response = await self._napcat.send_private(raw_target, content)
+                    response = await self._napcat.send_private(target_id, content)
                 self._last_sent_at = loop.time()
                 if self._messages is not None:
                     await self._messages.append(
                         chat_type=chat_type,
-                        encrypted_chat_id=encrypted_id,
-                        encrypted_sender_id="qq-bot:self",
+                        chat_id=target_id,
+                        sender_id="qq-bot:self",
                         sender_name="self",
                         content=content,
                         timestamp=time.time(),
@@ -397,7 +387,7 @@ class OutboundQueue:
                 LOGGER.info(
                     "QQ message sent chat=%s target=%s length=%d",
                     chat_type,
-                    encrypted_id,
+                    target_id,
                     len(content),
                 )
             except asyncio.CancelledError:
@@ -406,7 +396,7 @@ class OutboundQueue:
                 LOGGER.error(
                     "QQ message send failed chat=%s target=%s error=%s",
                     chat_type,
-                    encrypted_id,
+                    target_id,
                     type(exc).__name__,
                 )
             finally:

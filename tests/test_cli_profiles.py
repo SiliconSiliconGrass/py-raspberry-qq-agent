@@ -34,8 +34,8 @@ def test_profile_cli_supports_non_friend_accounts(
     set_output = capsys.readouterr().out
     profile = json.loads(set_output)
     assert profile["display_name"] == "Non Friend"
-    assert profile["encrypted_id"].startswith("qq-user:")
-    assert raw_qq not in set_output
+    assert profile["contact_id"] == raw_qq
+    assert raw_qq in set_output
 
     monkeypatch.setattr(
         sys,
@@ -55,4 +55,4 @@ def test_profile_cli_supports_non_friend_accounts(
     page = json.loads(list_output)
     assert page["total"] == 1
     assert page["items"][0]["display_name"] == "Non Friend"
-    assert raw_qq not in list_output
+    assert raw_qq in list_output

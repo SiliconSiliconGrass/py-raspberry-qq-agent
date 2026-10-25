@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from py_raspberry_qq_agent.config import AppConfig
-from py_raspberry_qq_agent.contacts import ContactVault
+from py_raspberry_qq_agent.model_boundary import ModelIds
 from py_raspberry_qq_agent.toolset import ChatDirectoryService
 
 
@@ -47,32 +47,21 @@ class FakeDirectoryNapCat:
         ]
 
 
-def _service(config: AppConfig, tmp_path: Path) -> tuple[
-    ChatDirectoryService,
-    ContactVault,
-]:
+def _service(config: AppConfig, tmp_path: Path) -> tuple[ChatDirectoryService, ModelIds]:
     config.directory_default_page_size = 2
     config.directory_max_page_size = 3
-    vault = ContactVault(tmp_path / "contacts.json", config.encryption_key)
-    return (
-        ChatDirectoryService(
-            config,
-            FakeDirectoryNapCat(),  # type: ignore[arg-type]
-            vault,
-        ),
-        vault,
-    )
+    return ChatDirectoryService(config, FakeDirectoryNapCat()), ModelIds()
 
 
 @pytest.mark.asyncio
-async def test_friend_list_is_encrypted_and_paginated(
+async def test_friend_list_is_referenced_and_paginated(
     config: AppConfig,
     tmp_path: Path,
 ) -> None:
-    service, vault = _service(config, tmp_path)
+    service, ids = _service(config, tmp_path)
 
-    first = await service.friends(page=1)
-    second = await service.friends(page=2, page_size=100)
+    first = ids.encode(await service.friends(page=1))
+    second = ids.encode(await service.friends(page=2, page_size=100))
 
     assert first["total"] == 5
     assert first["total_pages"] == 3
@@ -82,26 +71,26 @@ async def test_friend_list_is_encrypted_and_paginated(
     assert second["page_size"] == 3
     assert len(second["items"]) == 2
     assert second["has_more"] is False
-    assert all(item["encrypted_target_id"].startswith("qq-user:") for item in first["items"])
-    assert all(item["encrypted_target_id"].startswith("qq-user:") for item in second["items"])
+    assert all(item["target_id"].startswith("user:") for item in first["items"])
+    assert all(item["target_id"].startswith("user:") for item in second["items"])
     assert "10001" not in json.dumps(first, ensure_ascii=False)
-    alias = first["items"][0]["encrypted_target_id"]
-    assert vault.resolve(alias)[0] == "user"
+    alias = first["items"][0]["target_id"]
+    assert ids.decode({"target_id": alias, "chat_type": "private"})["target_id"] == "10002"
 
 
 @pytest.mark.asyncio
-async def test_group_list_is_encrypted_and_paginated(
+async def test_group_list_is_referenced_and_paginated(
     config: AppConfig,
     tmp_path: Path,
 ) -> None:
-    service, vault = _service(config, tmp_path)
+    service, ids = _service(config, tmp_path)
 
-    result = await service.groups(page=1, page_size=2)
+    result = ids.encode(await service.groups(page=1, page_size=2))
 
     assert result["total"] == 3
     assert result["total_pages"] == 2
     assert result["items"][0]["group_name"] == "Alpha"
-    assert result["items"][0]["encrypted_target_id"].startswith("qq-group:")
+    assert result["items"][0]["target_id"].startswith("group:")
     assert "20001" not in json.dumps(result, ensure_ascii=False)
-    alias = result["items"][0]["encrypted_target_id"]
-    assert vault.resolve(alias)[0] == "group"
+    alias = result["items"][0]["target_id"]
+    assert ids.decode({"target_id": alias, "chat_type": "group"})["target_id"] == "20001"

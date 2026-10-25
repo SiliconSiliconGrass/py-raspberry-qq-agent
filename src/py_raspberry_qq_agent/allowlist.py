@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .contacts import ContactVault
 
 
 class ChatAllowlist:
@@ -12,16 +11,15 @@ class ChatAllowlist:
         enabled: bool,
         private_qq_ids: list[str],
         group_ids: list[str],
-        vault: ContactVault,
     ) -> None:
         self._enabled = enabled
-        self._private_aliases = (
-            {vault.encrypt("user", qq_id) for qq_id in private_qq_ids}
+        self._private_ids = (
+            set(private_qq_ids)
             if enabled
             else set()
         )
-        self._group_aliases = (
-            {vault.encrypt("group", group_id) for group_id in group_ids}
+        self._group_ids = (
+            set(group_ids)
             if enabled
             else set()
         )
@@ -30,11 +28,11 @@ class ChatAllowlist:
     def enabled(self) -> bool:
         return self._enabled
 
-    def allows(self, chat_type: str, encrypted_chat_id: str) -> bool:
+    def allows(self, chat_type: str, chat_id: str) -> bool:
         if not self._enabled:
             return True
         if chat_type == "private":
-            return encrypted_chat_id in self._private_aliases
+            return chat_id in self._private_ids
         if chat_type == "group":
-            return encrypted_chat_id in self._group_aliases
+            return chat_id in self._group_ids
         return False

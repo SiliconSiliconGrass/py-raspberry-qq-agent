@@ -52,8 +52,6 @@ llm:
     base_url: https://example.invalid/v1
     api_key: classifier-key
     model: classifier-model
-security:
-  encryption_key: test-encryption-secret
 mcp:
   enabled: true
   upload:

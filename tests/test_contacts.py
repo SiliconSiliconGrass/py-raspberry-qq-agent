@@ -1,26 +1,10 @@
 from pathlib import Path
 
-from py_raspberry_qq_agent.contacts import ContactDirectory, ContactVault, RoleStore
-
-
-def test_contact_alias_is_stable_encrypted_and_resolvable(tmp_path: Path) -> None:
-    path = tmp_path / "contacts.json"
-    vault = ContactVault(path, "a sufficiently long local secret")
-    raw = "123456789"
-
-    alias = vault.encrypt("user", raw)
-    assert raw not in alias
-    assert alias.startswith("qq-user:")
-    assert vault.encrypt("user", raw) == alias
-    assert vault.resolve(alias) == ("user", raw)
-
-    reopened = ContactVault(path, "a sufficiently long local secret")
-    assert reopened.resolve(alias) == ("user", raw)
+from py_raspberry_qq_agent.contacts import ContactDirectory, RoleStore
 
 
 def test_profiles_and_roles_are_separate(tmp_path: Path) -> None:
-    vault = ContactVault(tmp_path / "contacts.json", "secret")
-    alias = vault.encrypt("user", "10001")
+    alias = "10001"
     profiles = ContactDirectory(tmp_path / "profiles.json")
     roles = RoleStore(tmp_path / "roles.json")
 
@@ -34,9 +18,8 @@ def test_profiles_and_roles_are_separate(tmp_path: Path) -> None:
 
 
 def test_profiles_support_non_friends_search_and_pagination(tmp_path: Path) -> None:
-    vault = ContactVault(tmp_path / "contacts.json", "secret")
     profiles = ContactDirectory(tmp_path / "profiles.json")
-    aliases = [vault.encrypt("user", str(30000 + index)) for index in range(5)]
+    aliases = [str(30000 + index) for index in range(5)]
 
     profiles.update(aliases[0], "Alice", "Infrastructure colleague")
     profiles.update(aliases[1], "Bob", "Event photographer")
@@ -54,7 +37,6 @@ def test_profiles_support_non_friends_search_and_pagination(tmp_path: Path) -> N
     assert len(second["items"]) == 2
     assert found["total"] == 2
     assert all("Infrastructure" in item["notes"] for item in found["items"])
-    assert "30003" not in str(second)
 
     assert profiles.remove(aliases[3]) is True
     assert profiles.get(aliases[3])["found"] is False

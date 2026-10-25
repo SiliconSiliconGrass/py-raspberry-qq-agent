@@ -1,14 +1,13 @@
 [project]
 name = "py-raspberry-qq-agent"
 version = "0.1.0"
-description = "A policy-aware QQ assistant with durable TODO, scheduling, knowledge, and MCP tools"
+description = "A policy-aware QQ assistant with in-memory tasks, scheduling, knowledge, and MCP tools"
 readme = "README.md"
 authors = [
     { name = "SiliconSiliconGrass", email = "indexguo@163.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "cryptography>=43,<47",
     "httpx>=0.27,<1",
     "mcp>=1.9,<2",
     "pyyaml>=6.0,<7",

@@ -24,8 +24,8 @@ class MessageStore:
         self,
         *,
         chat_type: str,
-        encrypted_chat_id: str,
-        encrypted_sender_id: str,
+        chat_id: str,
+        sender_id: str,
         sender_name: str,
         content: str,
         timestamp: float,
@@ -34,8 +34,8 @@ class MessageStore:
     ) -> None:
         record = {
             "chat_type": chat_type,
-            "encrypted_chat_id": encrypted_chat_id,
-            "encrypted_sender_id": encrypted_sender_id,
+            "chat_id": chat_id,
+            "sender_id": sender_id,
             "sender_name": sender_name[:128],
             "content": content[: self._max_content_chars],
             "timestamp": timestamp,
@@ -48,7 +48,7 @@ class MessageStore:
     async def history(
         self,
         chat_type: str,
-        encrypted_chat_id: str,
+        chat_id: str,
         *,
         limit: int = 50,
         start_time: float | None = None,
@@ -59,23 +59,23 @@ class MessageStore:
             item
             for item in records
             if item.get("chat_type") == chat_type
-            and item.get("encrypted_chat_id") == encrypted_chat_id
+            and item.get("chat_id") == chat_id
             and (start_time is None or float(item.get("timestamp", 0)) >= start_time)
-            and (end_time is None or float(item.get("timestamp", 0)) <= end_time)
+            and (end_time is None or float(item.get("timestamp", 0)) < end_time)
         ]
         selected = selected[-min(limit, self._max_fetch) :]
         return selected
 
     async def group_message_count(
         self,
-        encrypted_chat_id: str,
+        chat_id: str,
         start_time: float,
         end_time: float,
     ) -> int:
         return len(
             await self.history(
                 "group",
-                encrypted_chat_id,
+                chat_id,
                 limit=self._max_fetch,
                 start_time=start_time,
                 end_time=end_time,

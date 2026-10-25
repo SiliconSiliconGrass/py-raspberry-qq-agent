@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -8,124 +9,99 @@ import pytest
 from py_raspberry_qq_agent.agent import AgentRunner, AgentWorker
 from py_raspberry_qq_agent.config import AppConfig
 from py_raspberry_qq_agent.llm import AssistantReply
-from py_raspberry_qq_agent.todos import TodoStore
+from py_raspberry_qq_agent.tasks import AgentTask, TaskQueue
 from py_raspberry_qq_agent.toolset import Tool, ToolRegistry
 
 
-class ScriptedLlm:
-    def __init__(self, replies: list[AssistantReply]) -> None:
-        self.replies = replies
-
-    async def complete(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        force_json: bool = False,
-    ) -> AssistantReply:
-        return self.replies.pop(0)
-
-
-def _call(name: str, arguments: str, call_id: str) -> dict[str, Any]:
-    return {
-        "id": call_id,
-        "type": "function",
-        "function": {"name": name, "arguments": arguments},
-    }
-
-
 @pytest.mark.asyncio
-async def test_agent_must_use_tools_and_can_clear_todo(
+async def test_model_uses_reference_but_transport_receives_plain_qq(
     config: AppConfig,
-    tmp_path: Any,
 ) -> None:
-    todos = TodoStore(tmp_path / "todos.json")
-    item = await todos.add(
-        "reply",
-        chat_type="private",
-        encrypted_target_id="qq-user:abc",
-    )
+    sent = []
     registry = ToolRegistry()
-    sent: list[dict[str, Any]] = []
 
-    async def send(args: dict[str, Any]) -> dict[str, Any]:
+    async def send(args):
         sent.append(args)
         return {"queued": True}
 
-    async def delete(args: dict[str, Any]) -> dict[str, Any]:
-        return {"deleted": bool(await todos.delete(str(args["id"])))}
-
     registry.register(
-        Tool(
-            "send_qq_message",
-            "send",
-            {"type": "object", "properties": {}},
-            send,
-        )
+        Tool("send_qq_message", "send", {"type": "object"}, send, contact_refs=True)
     )
-    registry.register(
-        Tool("delete_todo_item", "delete", {"type": "object", "properties": {}}, delete)
-    )
-    llm = ScriptedLlm(
-        [
-            AssistantReply(
-                "",
-                [
-                    _call(
-                        "send_qq_message",
-                        '{"chat_type":"private",'
-                        '"encrypted_target_id":"qq-user:abc","content":"ok"}',
-                        "call-1",
-                    )
-                ],
-                {},
-            ),
-            AssistantReply(
-                "",
-                [_call("delete_todo_item", f'{{"id":"{item.id}"}}', "call-2")],
-                {},
-            ),
-            AssistantReply("internal finished text", [], {}),
-        ]
-    )
-    runner = AgentRunner(config, llm, registry)  # type: ignore[arg-type]
-    await runner.run_todo_round([item])
 
-    assert sent == [
-        {
-            "chat_type": "private",
-            "encrypted_target_id": "qq-user:abc",
-            "content": "ok",
-        }
-    ]
-    assert await todos.length() == 0
+    class Llm:
+        calls = 0
+
+        async def complete(self, messages, **kwargs):
+            assert "123456789" not in json.dumps(messages)
+            self.calls += 1
+            if self.calls == 1:
+                task = json.loads(messages[1]["content"].split("TASK=", 1)[1])
+                return AssistantReply(
+                    "",
+                    [
+                        {
+                            "id": "send-1",
+                            "function": {
+                                "name": "send_qq_message",
+                                "arguments": json.dumps(
+                                    {
+                                        "chat_type": "private",
+                                        "target_id": task["target_id"],
+                                        "content": "ok",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                    {},
+                )
+            return AssistantReply("done", [], {})
+
+    runner = AgentRunner(config, Llm(), registry)
+    await runner.run_task(
+        AgentTask("reply", chat_type="private", target_id="123456789")
+    )
+    assert sent == [{"chat_type": "private", "target_id": "123456789", "content": "ok"}]
 
 
 @pytest.mark.asyncio
-async def test_worker_rewakes_until_todo_is_cleared(
-    config: AppConfig,
-    tmp_path: Any,
-) -> None:
-    todos = TodoStore(tmp_path / "todos.json")
-    item = await todos.add("keep working")
+async def test_worker_drops_failed_task_and_continues_without_model_cleanup() -> None:
+    queue = TaskQueue()
+    await queue.add("fails")
+    await queue.add("works without a chat target")
+    calls = []
 
-    class RewakingRunner:
-        calls = 0
+    class Runner:
+        async def run_task(self, task: AgentTask) -> None:
+            calls.append(task.content)
+            if task.content == "fails":
+                raise RuntimeError("expected")
 
-        async def run_todo_round(self, items: list[Any]) -> None:
-            self.calls += 1
-            if self.calls == 2:
-                await todos.delete(item.id)
-
-    runner = RewakingRunner()
-    worker = AgentWorker(config, runner, todos)  # type: ignore[arg-type]
+    worker = AgentWorker(Runner(), queue)
     worker.start()
     try:
-        for _ in range(50):
-            if await todos.length() == 0:
-                break
-            await asyncio.sleep(0.01)
-        assert runner.calls == 2
-        assert await todos.length() == 0
+        await asyncio.wait_for(queue.join(), timeout=1)
     finally:
         await worker.stop()
+    assert calls == ["fails", "works without a chat target"]
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_invented_or_wrong_kind_references() -> None:
+    registry = ToolRegistry()
+    called = []
+
+    async def handler(args):
+        called.append(args)
+
+    registry.register(Tool("send", "", {}, handler, contact_refs=True))
+    group = registry.ids.encode({"chat_type": "group", "target_id": "99887766"})[
+        "target_id"
+    ]
+    for target in ["99887766", "user:invented", group]:
+        with pytest.raises(ValueError):
+            await registry.execute(
+                "send", {"chat_type": "private", "target_id": target}
+            )
+    assert called == []
