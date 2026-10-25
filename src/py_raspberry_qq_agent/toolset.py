@@ -14,9 +14,9 @@ from .contacts import ContactDirectory
 from .knowledge import KnowledgeBase
 from .mcp_runtime import McpManager
 from .messages import MessageStore
+from .model_boundary import ModelIds
 from .napcat import NapCatClient, OutboundQueue
 from .scheduler import ScheduleStore
-from .model_boundary import ModelIds
 
 LOGGER = logging.getLogger(__name__)
 ToolHandler = Callable[[dict[str, Any]], Awaitable[Any]]

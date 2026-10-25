@@ -68,6 +68,7 @@ async def test_due_query_is_half_open_and_excludes_completed_members_and_overdue
 @pytest.mark.asyncio
 async def test_assignment_windows_include_only_current_role_changes(database) -> None:
     from unittest.mock import AsyncMock, Mock
+
     from py_raspberry_qq_agent.assignments import AssignmentNotifications
     from py_raspberry_qq_agent.guild import GuildConfig
     from py_raspberry_qq_agent.keycloak import User

@@ -388,6 +388,7 @@ class AppConfig:
         if self.guild.weekly.schedule:
             from datetime import datetime
             from zoneinfo import ZoneInfo
+
             from .scheduler import compute_next_run
 
             if self.guild.weekly.schedule.get("kind") != "weekly":

@@ -5,15 +5,15 @@ from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 from .agent import AgentRunner, AgentWorker
-from .assignments import AssignmentNotifications
 from .allowlist import ChatAllowlist
+from .assignments import AssignmentNotifications
 from .config import AppConfig
 from .contacts import ContactDirectory, RoleStore
 from .digest import GroupDigestService
-from .incoming import IncomingService
 from .guild import DueReminders, GuildRepository, WindowPoller
-from .keycloak import KeycloakDirectory
 from .guild_reports import WeeklyReports
+from .incoming import IncomingService
+from .keycloak import KeycloakDirectory
 from .knowledge import KnowledgeBase
 from .llm import OpenAICompatibleClient
 from .logging_setup import configure_logging

@@ -52,9 +52,10 @@ class ModelIds:
                     and value.get("chat_type") == "group"
                     else "user"
                 )
-                if key in {"sender_id", "contact_id"} or value.get("chat_type"):
-                    if kind != expected:
-                        raise ValueError("contact reference does not match chat type")
+                if (
+                    key in {"sender_id", "contact_id"} or value.get("chat_type")
+                ) and kind != expected:
+                    raise ValueError("contact reference does not match chat type")
                 result[key] = raw_id
             else:
                 result[key] = self.decode(item)

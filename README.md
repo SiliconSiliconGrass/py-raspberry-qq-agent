@@ -172,3 +172,27 @@ uv run --env-file .env py-raspberry-qq-agent --config config.yaml guild-report -
 它有独立的内存窗口游标，读取 `node_members.created_at`，向新增直接负责人/成员或角色变更后的用户发私聊。
 角色变化时仅重建对应关系，原样保存成员保持原记录及创建时间。包括创建节点时的直接分配及默认复制的直接成员，不按继承权限扩散通知。
 Bot 不维护成员快照、事件表或去重存储。两次查询间被移除的关系、被覆盖的中间角色变化，以及跨窗口才提交的事务可能漏报；这是接受的尽力而为行为。
+
+## 配置 Keycloak
+
+`scripts/configure_keycloak.py` 默认只预览计划。它添加管理员可维护的单值 `qq_number` 属性，
+创建独立 `qq-bot` client，启用服务账号并授予用户只读角色及相应 client scope。
+不向普通登录 token 添加 QQ mapper，不修改任何现有用户的 QQ 绑定，也不覆盖已有同名 client。
+
+```bash
+uv run --env-file ../guild-go/.env --env-file ../keycloak.env python scripts/configure_keycloak.py
+# 审核输出后，再追加 --apply 执行。
+```
+
+`keycloak.env` 提供临时管理员的 `user`、`password`；`guild-go/.env` 提供 `OIDC_ISSUER`。
+服务账号凭据只写入 `data/keycloak-bot.env`，文件权限 0600。可用多个 `--env-file` 同时加载 Bot 自身配置和该文件。
+QQ 号由管理员在 Keycloak 用户属性中填写，Bot 本地联系人资料不能修改绑定。
+Keycloak 默认的用户只读管理角色能读取 realm 用户资料，并不是字段级授权；Bot 运行时只读取所需用户。
+
+PostgreSQL 测试使用已经初始化 `guild-go` 表结构 的独立测试库：
+
+```bash
+TEST_GUILD_DATABASE_URL='postgres://.../guild_automation_test' uv run pytest -q
+```
+
+Python 集成测试只创建并清理自己的测试记录；Go 集成测试会清空测试库，不要让它们同时运行。

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 
-
 class ChatAllowlist:
     """Hard allowlist for chats that may trigger or receive Agent actions."""
 

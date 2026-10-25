@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from .reports import publish, summarize
@@ -84,8 +84,9 @@ class WeeklyReports:
         )
         comments = await self._repository.query(
             """
-            SELECT node_id,author_subject,body,created_at FROM comments
-            WHERE created_at >= %s AND created_at < %s ORDER BY created_at,id
+            SELECT c.node_id,n.title AS node_title,c.author_subject,c.body,c.created_at
+            FROM comments c JOIN nodes n ON n.id=c.node_id
+            WHERE c.created_at >= %s AND c.created_at < %s ORDER BY c.created_at,c.id
         """,
             (start, end),
         )
@@ -96,7 +97,7 @@ class WeeklyReports:
             try:
                 user = await self._directory.user(subject)
                 names[subject] = user.name if user else subject
-            except Exception:
+            except Exception:  # noqa: BLE001 - display lookup must not block the report
                 LOGGER.warning("weekly report identity unavailable subject=%s", subject)
                 names[subject] = subject
         for node in nodes:
