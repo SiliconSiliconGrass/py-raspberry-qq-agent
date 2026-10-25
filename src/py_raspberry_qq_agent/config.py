@@ -182,6 +182,7 @@ class AppConfig:
         keycloak = _section(raw, "keycloak")
         guild = _section(raw, "guild")
         due = _section(guild, "due_reminder")
+        assignments = _section(guild, "assignments")
         weekly = _section(guild, "weekly_report")
         gate = _section(raw, "message_gate")
         digest = _section(raw, "group_digest")
@@ -272,6 +273,7 @@ class AppConfig:
                 poll_seconds=float(guild.get("poll_seconds", 60)),
                 due_enabled=_as_bool(due.get("enabled", True), True),
                 advance_hours=float(due.get("advance_hours", 24)),
+                assignments_enabled=_as_bool(assignments.get("enabled", True), True),
                 weekly=WeeklyReportConfig(
                     enabled=_as_bool(weekly.get("enabled", True), True),
                     schedule=_section(weekly, "schedule"),

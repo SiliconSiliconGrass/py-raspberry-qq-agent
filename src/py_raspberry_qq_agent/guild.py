@@ -35,6 +35,7 @@ class GuildConfig:
     poll_seconds: float = 60
     due_enabled: bool = True
     advance_hours: float = 24
+    assignments_enabled: bool = True
     weekly: WeeklyReportConfig = field(default_factory=WeeklyReportConfig)
 
 

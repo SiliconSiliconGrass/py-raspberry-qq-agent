@@ -135,6 +135,8 @@ guild:
   due_reminder:
     enabled: true
     advance_hours: 24
+  assignments:
+    enabled: true
   weekly_report:
     enabled: true
     # UTC+8. Empty means no automatic run until a time is chosen.

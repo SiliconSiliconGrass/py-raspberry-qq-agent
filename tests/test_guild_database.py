@@ -63,3 +63,43 @@ async def test_due_query_is_half_open_and_excludes_completed_members_and_overdue
     # Even a delayed query never turns into an overdue reminder.
     delayed = await repository.due(start - timedelta(days=3), end, advance)
     assert ids[4] not in [row["id"] for row in delayed]
+
+
+@pytest.mark.asyncio
+async def test_assignment_windows_include_only_current_role_changes(database) -> None:
+    from unittest.mock import AsyncMock, Mock
+    from py_raspberry_qq_agent.assignments import AssignmentNotifications
+    from py_raspberry_qq_agent.guild import GuildConfig
+    from py_raspberry_qq_agent.keycloak import User
+
+    conn, repository, subject = database
+    start = datetime(2026, 10, 25, 12, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    cursor = await conn.execute(
+        "INSERT INTO nodes(title,created_by) VALUES ('Assignment boundary',%s) RETURNING id",
+        (subject,),
+    )
+    node_id = (await cursor.fetchone())[0]
+    await conn.execute(
+        "INSERT INTO node_members(node_id,subject,role,created_at) VALUES (%s,%s,'member',%s)",
+        (node_id, subject, end),
+    )
+    directory = AsyncMock()
+    directory.user.return_value = User(subject, "Test", "12345")
+    outbound = Mock()
+    service = AssignmentNotifications(GuildConfig(), repository, directory, outbound)
+    await service.check(start, end)
+    outbound.enqueue.assert_not_called()
+    await service.check(end, end + timedelta(minutes=1))
+    outbound.enqueue.assert_called_once()
+    assert "成员" in outbound.enqueue.call_args.args[2]
+    outbound.reset_mock()
+    # A role promotion moves the assignment to the next window; unchanged saves do not.
+    await conn.execute("DELETE FROM node_members WHERE node_id=%s", (node_id,))
+    await conn.execute(
+        "INSERT INTO node_members(node_id,subject,role,created_at) VALUES (%s,%s,'leader',%s)",
+        (node_id, subject, end + timedelta(minutes=1)),
+    )
+    await service.check(end + timedelta(minutes=1), end + timedelta(minutes=2))
+    outbound.enqueue.assert_called_once()
+    assert "负责人" in outbound.enqueue.call_args.args[2]

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 from .agent import AgentRunner, AgentWorker
+from .assignments import AssignmentNotifications
 from .allowlist import ChatAllowlist
 from .config import AppConfig
 from .contacts import ContactDirectory, RoleStore
@@ -50,6 +51,7 @@ class Application:
     scheduler: Scheduler | None = None
     identities: KeycloakDirectory | None = None
     due_poller: WindowPoller | None = None
+    assignment_poller: WindowPoller | None = None
     weekly_reports: WeeklyReports | None = None
 
     @classmethod
@@ -185,6 +187,17 @@ class Application:
                 self.mcp,
             )
             self.weekly_reports.start()
+            if self.config.guild.assignments_enabled:
+                assignments = AssignmentNotifications(
+                    self.config.guild, repository, self.identities, self.outbound
+                )
+                self.assignment_poller = WindowPoller(
+                    repository,
+                    self.config.guild.poll_seconds,
+                    assignments.check,
+                    "guild-assignments",
+                )
+                self.assignment_poller.start()
             if self.config.guild.due_enabled:
                 reminders = DueReminders(
                     self.config.guild,
@@ -223,6 +236,8 @@ class Application:
         LOGGER.info("application stopping")
         if self.due_poller:
             await self.due_poller.stop()
+        if self.assignment_poller:
+            await self.assignment_poller.stop()
         if self.weekly_reports:
             await self.weekly_reports.stop()
         if self.identities:
