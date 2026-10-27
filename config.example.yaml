@@ -43,6 +43,8 @@ llm:
 napcat:
   ws_url: ${NAPCAT_WS_URL:-ws://127.0.0.1:3001}
   access_token: ${NAPCAT_ACCESS_TOKEN:-}
+  # Enable private messages to non-friends through a verified common group.
+  allow_temp_session: false
   reconnect_seconds: 5
   request_timeout_seconds: 30
 

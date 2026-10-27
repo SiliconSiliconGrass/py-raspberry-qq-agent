@@ -109,6 +109,7 @@ class AppConfig:
 
     napcat_ws_url: str
     napcat_access_token: str
+    napcat_allow_temp_session: bool
     napcat_reconnect_seconds: float
     napcat_request_timeout_seconds: float
 
@@ -261,6 +262,7 @@ class AppConfig:
             time_tool=_as_bool(_section(llm, "prompt").get("time_tool", True), True),
             napcat_ws_url=str(napcat.get("ws_url", "ws://127.0.0.1:3001")),
             napcat_access_token=str(napcat.get("access_token", "")),
+            napcat_allow_temp_session=_as_bool(napcat.get("allow_temp_session", False)),
             napcat_reconnect_seconds=float(napcat.get("reconnect_seconds", 5)),
             napcat_request_timeout_seconds=float(
                 napcat.get("request_timeout_seconds", 30)

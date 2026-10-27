@@ -52,6 +52,9 @@ class NapCatClient:
         self._runner: asyncio.Task[None] | None = None
         self._message_tasks: set[asyncio.Task[None]] = set()
         self._self_id = ""
+        self._friend_ids: set[str] = set()
+        self._friend_ids_expires_at = 0.0
+        self._temp_groups: dict[str, tuple[float, str]] = {}
 
     def start(self) -> None:
         if self._runner is None:
@@ -204,6 +207,9 @@ class NapCatClient:
             return None
         sender = payload.get("sender") or {}
         timestamp = float(payload.get("time") or time.time())
+        source_group = str(payload.get("group_id", ""))
+        if source_group.isdecimal() and int(source_group) > 0:
+            self._remember_temp_group(raw_sender, source_group)
         return IncomingMessage(
             chat_type=message_type,
             raw_chat_id=raw_chat,
@@ -252,16 +258,86 @@ class NapCatClient:
         if retcode not in {0, None}:
             raise NapCatError(
                 f"NapCat action {action} failed retcode={retcode} "
-                f"message={response.get('message', '')}"
+                f"message={response.get('message') or response.get('wording') or ''}"
             )
         data = response.get("data")
         return data if isinstance(data, dict) else {"data": data}
 
     async def send_private(self, raw_user_id: str, content: str) -> dict[str, Any]:
-        return await self.call_action(
-            "send_private_msg",
-            {"user_id": int(raw_user_id), "message": content},
-            timeout=self._config.outbound_send_timeout_seconds,
+        # Bound discovery and delivery together; never retry an uncertain send.
+        async with asyncio.timeout(self._config.outbound_send_timeout_seconds):
+            params: dict[str, Any] = {
+                "user_id": int(raw_user_id),
+                "message": content,
+            }
+            if self._config.napcat_allow_temp_session:
+                if time.monotonic() >= self._friend_ids_expires_at:
+                    friends = await self.fetch_friend_list()
+                    self._friend_ids = {
+                        str(friend.get("user_id", "")) for friend in friends
+                    }
+                    self._friend_ids_expires_at = time.monotonic() + 60
+                if raw_user_id not in self._friend_ids:
+                    group_id = await self._find_temp_group(raw_user_id)
+                    # NapCat may fall back to sending to the group when it cannot
+                    # resolve the user. Require a resolvable, matching user first.
+                    user = await self.call_action(
+                        "get_stranger_info", {"user_id": int(raw_user_id)}
+                    )
+                    if (
+                        str(user.get("user_id", "")) != raw_user_id
+                        or not user.get("uid")
+                    ):
+                        raise NapCatError(
+                            f"Cannot resolve user for temporary session target={raw_user_id}"
+                        )
+                    params["group_id"] = int(group_id)
+            LOGGER.info(
+                "QQ private send route target=%s mode=%s source_group=%s",
+                raw_user_id,
+                "temporary" if "group_id" in params else "private",
+                params.get("group_id", "-"),
+            )
+            return await self.call_action(
+                "send_private_msg",
+                params,
+                timeout=self._config.outbound_send_timeout_seconds,
+            )
+
+    def _remember_temp_group(self, raw_user_id: str, group_id: str) -> None:
+        self._temp_groups.pop(raw_user_id, None)
+        if len(self._temp_groups) >= 256:
+            self._temp_groups.pop(next(iter(self._temp_groups)))
+        self._temp_groups[raw_user_id] = (time.monotonic() + 60, group_id)
+
+    async def _find_temp_group(self, raw_user_id: str) -> str:
+        async def is_member(group_id: str) -> bool:
+            try:
+                member = await self.call_action(
+                    "get_group_member_info",
+                    {"group_id": int(group_id), "user_id": int(raw_user_id)},
+                )
+            except NapCatError:
+                return False
+            return str(member.get("user_id", "")) == raw_user_id
+
+        cached = self._temp_groups.pop(raw_user_id, None)
+        checked: set[str] = set()
+        if cached and time.monotonic() < cached[0]:
+            checked.add(cached[1])
+            if await is_member(cached[1]):
+                self._remember_temp_group(raw_user_id, cached[1])
+                return cached[1]
+        for group in await self.fetch_group_list():
+            group_id = str(group.get("group_id", ""))
+            if not group_id.isdecimal() or int(group_id) <= 0 or group_id in checked:
+                continue
+            checked.add(group_id)
+            if await is_member(group_id):
+                self._remember_temp_group(raw_user_id, group_id)
+                return group_id
+        raise NapCatError(
+            f"No verified common group for temporary session target={raw_user_id}"
         )
 
     async def send_group(self, raw_group_id: str, content: str) -> dict[str, Any]:
@@ -394,10 +470,11 @@ class OutboundQueue:
                 raise
             except Exception as exc:  # noqa: BLE001 - isolate one delivery
                 LOGGER.error(
-                    "QQ message send failed chat=%s target=%s error=%s",
+                    "QQ message send failed chat=%s target=%s error=%s detail=%s",
                     chat_type,
                     target_id,
                     type(exc).__name__,
+                    str(exc)[:500],
                 )
             finally:
                 self._queue.task_done()
