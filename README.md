@@ -18,6 +18,30 @@ uv run --env-file .env py-raspberry-qq-agent --config config.yaml
 所有行为参数从 YAML 读取；使用 `${VAR}` 或 `${VAR:-fallback}` 引用环境变量。
 `config.yaml` 和 `.env` 不提交到仓库。
 
+## Docker 运行
+
+准备好 `config.yaml` 和 `.env` 后，在项目目录执行：
+
+```bash
+docker build -t py-raspberry-qq-agent .
+mkdir -p data logs knowledge notebooks
+docker run -d --name qq-agent --restart unless-stopped \
+  --env-file .env \
+  -v "$PWD/config.yaml:/app/config.yaml:ro" \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  -v "$PWD/knowledge:/app/knowledge:ro" \
+  -v "$PWD/notebooks:/app/notebooks" \
+  py-raspberry-qq-agent
+```
+
+镜像使用 Python 3.12，通过 `uv.lock` 安装运行依赖，并保留 uv 供 MCP 子进程使用。
+配置、密钥和本地数据不打入镜像；上述挂载对应示例配置中的默认目录。
+将 `.env` 中的 `NAPCAT_WS_URL` 设置为容器可访问的 NapCat 地址，
+容器内的 `127.0.0.1` 指向容器自身。Linux 上连接宿主机服务时，也可以添加 `--network host`。
+
+查看运行日志：`docker logs -f qq-agent`。
+
 ## 执行方式
 
 - 保存收到的消息历史。私聊和群内 @机器人消息经过允许列表、权限和重要性判断。
