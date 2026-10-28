@@ -45,6 +45,8 @@ napcat:
   access_token: ${NAPCAT_ACCESS_TOKEN:-}
   # Enable private messages to non-friends through a verified common group.
   allow_temp_session: false
+  # Fixed TTL shared by friend, group and per-group member caches.
+  cache_ttl_seconds: 7200
   reconnect_seconds: 5
   request_timeout_seconds: 30
 

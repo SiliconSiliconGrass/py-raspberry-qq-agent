@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -110,6 +111,7 @@ class AppConfig:
     napcat_ws_url: str
     napcat_access_token: str
     napcat_allow_temp_session: bool
+    napcat_cache_ttl_seconds: float
     napcat_reconnect_seconds: float
     napcat_request_timeout_seconds: float
 
@@ -263,6 +265,7 @@ class AppConfig:
             napcat_ws_url=str(napcat.get("ws_url", "ws://127.0.0.1:3001")),
             napcat_access_token=str(napcat.get("access_token", "")),
             napcat_allow_temp_session=_as_bool(napcat.get("allow_temp_session", False)),
+            napcat_cache_ttl_seconds=float(napcat.get("cache_ttl_seconds", 7200)),
             napcat_reconnect_seconds=float(napcat.get("reconnect_seconds", 5)),
             napcat_request_timeout_seconds=float(
                 napcat.get("request_timeout_seconds", 30)
@@ -369,6 +372,11 @@ class AppConfig:
         return config
 
     def validate(self) -> None:
+        if (
+            not math.isfinite(self.napcat_cache_ttl_seconds)
+            or self.napcat_cache_ttl_seconds <= 0
+        ):
+            raise ConfigError("napcat.cache_ttl_seconds must be positive and finite")
         if self.guild.enabled:
             if not self.guild.database_url:
                 raise ConfigError("guild.database_url is required")

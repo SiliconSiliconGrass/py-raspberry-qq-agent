@@ -54,7 +54,11 @@ class NapCatClient:
         self._self_id = ""
         self._friend_ids: set[str] = set()
         self._friend_ids_expires_at = 0.0
-        self._temp_groups: dict[str, tuple[float, str]] = {}
+        self._group_ids: set[str] = set()
+        self._group_ids_expires_at = 0.0
+        self._group_members: dict[str, tuple[float, set[str]]] = {}
+        self._discovery_lock = asyncio.Lock()
+        self._cache_generation = 0
 
     def start(self) -> None:
         if self._runner is None:
@@ -71,6 +75,7 @@ class NapCatClient:
         if self._runner:
             await self._runner
             self._runner = None
+        self._reset_caches()
 
     def connected(self) -> bool:
         return self._ws is not None and not self._ws.close_code
@@ -105,6 +110,7 @@ class NapCatClient:
             finally:
                 self._ws = None
                 self._connected.clear()
+                self._reset_caches()
                 for future in self._pending.values():
                     if not future.done():
                         future.set_exception(NapCatError("NapCat disconnected"))
@@ -136,6 +142,11 @@ class NapCatClient:
                 future.set_result(payload)
             return
 
+        self_id = str(payload.get("self_id") or "")
+        if self_id:
+            if self._self_id and self_id != self._self_id:
+                self._reset_caches()
+            self._self_id = self_id
         if payload.get("post_type") != "message":
             return
         message = self._parse_message(payload)
@@ -207,9 +218,6 @@ class NapCatClient:
             return None
         sender = payload.get("sender") or {}
         timestamp = float(payload.get("time") or time.time())
-        source_group = str(payload.get("group_id", ""))
-        if source_group.isdecimal() and int(source_group) > 0:
-            self._remember_temp_group(raw_sender, source_group)
         return IncomingMessage(
             chat_type=message_type,
             raw_chat_id=raw_chat,
@@ -255,7 +263,7 @@ class NapCatClient:
             self._pending.pop(echo, None)
 
         retcode = response.get("retcode", 0)
-        if retcode not in {0, None}:
+        if retcode not in {0, None} or response.get("status") == "failed":
             raise NapCatError(
                 f"NapCat action {action} failed retcode={retcode} "
                 f"message={response.get('message') or response.get('wording') or ''}"
@@ -264,78 +272,126 @@ class NapCatClient:
         return data if isinstance(data, dict) else {"data": data}
 
     async def send_private(self, raw_user_id: str, content: str) -> dict[str, Any]:
-        # Bound discovery and delivery together; never retry an uncertain send.
-        async with asyncio.timeout(self._config.outbound_send_timeout_seconds):
-            params: dict[str, Any] = {
-                "user_id": int(raw_user_id),
-                "message": content,
-            }
-            if self._config.napcat_allow_temp_session:
-                if time.monotonic() >= self._friend_ids_expires_at:
-                    friends = await self.fetch_friend_list()
-                    self._friend_ids = {
-                        str(friend.get("user_id", "")) for friend in friends
-                    }
-                    self._friend_ids_expires_at = time.monotonic() + 60
-                if raw_user_id not in self._friend_ids:
-                    group_id = await self._find_temp_group(raw_user_id)
-                    # NapCat may fall back to sending to the group when it cannot
-                    # resolve the user. Require a resolvable, matching user first.
-                    user = await self.call_action(
-                        "get_stranger_info", {"user_id": int(raw_user_id)}
-                    )
-                    if (
-                        str(user.get("user_id", "")) != raw_user_id
-                        or not user.get("uid")
-                    ):
-                        raise NapCatError(
-                            f"Cannot resolve user for temporary session target={raw_user_id}"
+        params: dict[str, Any] = {"user_id": int(raw_user_id), "message": content}
+        if self._config.napcat_allow_temp_session:
+            # Discovery has its own budget; delivery keeps the configured send timeout.
+            async with asyncio.timeout(self._config.napcat_request_timeout_seconds):
+                async with self._discovery_lock:
+                    generation = self._cache_generation
+                    if time.monotonic() >= self._friend_ids_expires_at:
+                        data = await self.call_action("get_friend_list", {})
+                        friends = _parse_id_set(data, "friends", "user_id")
+                        self._check_cache_generation(generation)
+                        self._friend_ids = friends
+                        self._friend_ids_expires_at = (
+                            time.monotonic() + self._config.napcat_cache_ttl_seconds
                         )
-                    params["group_id"] = int(group_id)
-            LOGGER.info(
-                "QQ private send route target=%s mode=%s source_group=%s",
-                raw_user_id,
-                "temporary" if "group_id" in params else "private",
-                params.get("group_id", "-"),
-            )
-            return await self.call_action(
-                "send_private_msg",
-                params,
-                timeout=self._config.outbound_send_timeout_seconds,
-            )
+                    if raw_user_id not in self._friend_ids:
+                        group_id = await self._find_temp_group(raw_user_id, generation)
+                        # NapCat can fall back to a group send for an unresolved user.
+                        user = await self.call_action(
+                            "get_stranger_info", {"user_id": int(raw_user_id)}
+                        )
+                        if (
+                            str(user.get("user_id", "")) != raw_user_id
+                            or not user.get("uid")
+                        ):
+                            raise NapCatError(
+                                f"Cannot resolve user for temporary session target={raw_user_id}"
+                            )
+                        params["group_id"] = int(group_id)
+                    self._check_cache_generation(generation)
+        LOGGER.info(
+            "QQ private send route target=%s mode=%s source_group=%s",
+            raw_user_id,
+            "temporary" if "group_id" in params else "private",
+            params.get("group_id", "-"),
+        )
+        # Never retry an uncertain send, including through another group.
+        return await self.call_action(
+            "send_private_msg",
+            params,
+            timeout=self._config.outbound_send_timeout_seconds,
+        )
 
-    def _remember_temp_group(self, raw_user_id: str, group_id: str) -> None:
-        self._temp_groups.pop(raw_user_id, None)
-        if len(self._temp_groups) >= 256:
-            self._temp_groups.pop(next(iter(self._temp_groups)))
-        self._temp_groups[raw_user_id] = (time.monotonic() + 60, group_id)
+    def _reset_caches(self) -> None:
+        self._cache_generation += 1
+        self._friend_ids.clear()
+        self._friend_ids_expires_at = 0.0
+        self._group_ids.clear()
+        self._group_ids_expires_at = 0.0
+        self._group_members.clear()
 
-    async def _find_temp_group(self, raw_user_id: str) -> str:
+    def _check_cache_generation(self, generation: int) -> None:
+        if generation != self._cache_generation:
+            raise NapCatError("NapCat connection or account changed during discovery")
+
+    async def _find_temp_group(self, raw_user_id: str, generation: int) -> str:
+        # Called under _discovery_lock, so overlapping callers share completed loads.
+        if time.monotonic() >= self._group_ids_expires_at:
+            data = await self.call_action("get_group_list", {})
+            groups = _parse_id_set(data, "groups", "group_id")
+            self._check_cache_generation(generation)
+            self._group_ids = groups
+            self._group_ids_expires_at = (
+                time.monotonic() + self._config.napcat_cache_ttl_seconds
+            )
+        now = time.monotonic()
+        self._group_members = {
+            group_id: snapshot
+            for group_id, snapshot in self._group_members.items()
+            if group_id in self._group_ids and now < snapshot[0]
+        }
+        incomplete = False
+
         async def is_member(group_id: str) -> bool:
+            nonlocal incomplete
             try:
                 member = await self.call_action(
                     "get_group_member_info",
-                    {"group_id": int(group_id), "user_id": int(raw_user_id)},
+                    {
+                        "group_id": int(group_id),
+                        "user_id": int(raw_user_id),
+                        "no_cache": True,
+                    },
                 )
             except NapCatError:
+                self._check_cache_generation(generation)
+                incomplete = True
                 return False
-            return str(member.get("user_id", "")) == raw_user_id
+            self._check_cache_generation(generation)
+            return (
+                str(member.get("user_id", "")) == raw_user_id
+                and str(member.get("group_id", group_id)) == group_id
+            )
 
-        cached = self._temp_groups.pop(raw_user_id, None)
-        checked: set[str] = set()
-        if cached and time.monotonic() < cached[0]:
-            checked.add(cached[1])
-            if await is_member(cached[1]):
-                self._remember_temp_group(raw_user_id, cached[1])
-                return cached[1]
-        for group in await self.fetch_group_list():
-            group_id = str(group.get("group_id", ""))
-            if not group_id.isdecimal() or int(group_id) <= 0 or group_id in checked:
-                continue
-            checked.add(group_id)
-            if await is_member(group_id):
-                self._remember_temp_group(raw_user_id, group_id)
+        for group_id, (_, members) in list(self._group_members.items()):
+            if raw_user_id in members and await is_member(group_id):
                 return group_id
+        for group_id in sorted(self._group_ids, key=int):
+            if group_id in self._group_members:
+                continue
+            try:
+                data = await self.call_action(
+                    "get_group_member_list",
+                    {"group_id": int(group_id), "no_cache": True},
+                    timeout=min(8, self._config.napcat_request_timeout_seconds),
+                )
+                members = _parse_id_set(data, "members", "user_id", group_id=group_id)
+            except (NapCatError, TimeoutError):
+                self._check_cache_generation(generation)
+                incomplete = True
+                continue
+            self._check_cache_generation(generation)
+            self._group_members[group_id] = (
+                time.monotonic() + self._config.napcat_cache_ttl_seconds,
+                members,
+            )
+            if raw_user_id in members and await is_member(group_id):
+                return group_id
+        self._check_cache_generation(generation)
+        if incomplete:
+            raise NapCatError(f"Common group lookup incomplete target={raw_user_id}")
         raise NapCatError(
             f"No verified common group for temporary session target={raw_user_id}"
         )
@@ -488,6 +544,26 @@ def _strip_cq_codes(value: str) -> str:
 def _response_message_id(response: dict[str, Any]) -> str:
     value = response.get("message_id", "")
     return str(value) if value not in {None, ""} else ""
+
+
+def _parse_id_set(
+    data: Any, label: str, field: str, *, group_id: str | None = None
+) -> set[str]:
+    # Authoritative cache snapshots must not turn missing or malformed data into [].
+    rows = data.get("data", data.get(label)) if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise NapCatError(f"Invalid NapCat {label} list response")
+    ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise NapCatError(f"Invalid NapCat {label} list entry")
+        raw_id = str(row.get(field, ""))
+        if not raw_id.isdecimal() or int(raw_id) <= 0:
+            raise NapCatError(f"Invalid NapCat {label} {field}")
+        if group_id is not None and str(row.get("group_id", group_id)) != group_id:
+            raise NapCatError("NapCat member list returned a different group")
+        ids.add(raw_id)
+    return ids
 
 
 def _extract_list_data(data: Any, label: str) -> list[dict[str, Any]]:
