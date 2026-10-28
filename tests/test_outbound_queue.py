@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from py_raspberry_qq_agent.allowlist import ChatAllowlist
-from py_raspberry_qq_agent.contacts import ContactVault
-from py_raspberry_qq_agent.napcat import OutboundQueue
+from py_raspberry_qq_agent.config import AppConfig
+from py_raspberry_qq_agent.napcat import NapCatError, OutboundQueue
 
 
 class RecordingNapCat:
@@ -32,16 +32,14 @@ async def test_outbound_queue_enforces_send_interval(tmp_path: Path) -> None:
         outbound_min_interval_seconds=0.04,
         outbound_max_interval_seconds=0.04,
     )
-    vault = ContactVault(tmp_path / "contacts.json", "secret")
-    alias = vault.encrypt("user", "12345")
+    alias = "12345"
     napcat = RecordingNapCat()
     allowlist = ChatAllowlist(
         enabled=False,
         private_qq_ids=[],
         group_ids=[],
-        vault=vault,
     )
-    queue = OutboundQueue(config, vault, napcat, allowlist)  # type: ignore[arg-type]
+    queue = OutboundQueue(config, napcat, allowlist)  # type: ignore[arg-type]
 
     queue.start()
     queue.enqueue("private", alias, "first")
@@ -59,19 +57,44 @@ def test_outbound_queue_rejects_unlisted_target(tmp_path: Path) -> None:
         outbound_min_interval_seconds=0,
         outbound_max_interval_seconds=0,
     )
-    vault = ContactVault(tmp_path / "contacts.json", "secret")
-    allowed_alias = vault.encrypt("user", "12345")
-    blocked_alias = vault.encrypt("user", "54321")
+    allowed_alias = "12345"
+    blocked_alias = "54321"
     allowlist = ChatAllowlist(
         enabled=True,
         private_qq_ids=["12345"],
         group_ids=[],
-        vault=vault,
     )
     queue = OutboundQueue(
-        config, vault, RecordingNapCat(), allowlist  # type: ignore[arg-type]
+        config, RecordingNapCat(), allowlist  # type: ignore[arg-type]
     )
 
     queue.enqueue("private", allowed_alias, "allowed")
     with pytest.raises(PermissionError):
         queue.enqueue("private", blocked_alias, "blocked")
+
+
+@pytest.mark.asyncio
+async def test_outbound_queue_logs_napcat_error_details_and_continues(
+    config: AppConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    class FailingNapCat(RecordingNapCat):
+        async def send_private(self, raw_user_id: str, content: str) -> None:
+            if content == "first":
+                raise NapCatError("retcode=1200 result=16: add friend first")
+            await super().send_private(raw_user_id, content)
+
+    napcat = FailingNapCat()
+    queue = OutboundQueue(
+        config,
+        napcat,
+        ChatAllowlist(enabled=False, private_qq_ids=[], group_ids=[]),
+    )
+    queue.start()
+    try:
+        queue.enqueue("private", "12345", "first")
+        queue.enqueue("private", "12345", "second")
+        await asyncio.wait_for(queue._queue.join(), timeout=1)
+    finally:
+        await queue.stop()
+    assert "retcode=1200 result=16: add friend first" in caplog.text
+    assert napcat.messages == [("12345", "second")]

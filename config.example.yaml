@@ -35,8 +35,6 @@ llm:
     extra_body: {}
   max_tool_rounds: 12
   tool_timeout_seconds: 120
-  max_todo_rewakes: 4
-  conversation_messages: 30
   prompt:
     # Empty means use the built-in policy prompt.
     system: ""
@@ -45,13 +43,14 @@ llm:
 napcat:
   ws_url: ${NAPCAT_WS_URL:-ws://127.0.0.1:3001}
   access_token: ${NAPCAT_ACCESS_TOKEN:-}
+  # Enable private messages to non-friends through a verified common group.
+  allow_temp_session: false
+  # Fixed TTL shared by friend, group and per-group member caches.
+  cache_ttl_seconds: 7200
   reconnect_seconds: 5
   request_timeout_seconds: 30
 
 security:
-  # Required. Generate once and keep stable: it is the contact encryption key.
-  # Example: openssl rand -base64 48
-  encryption_key: ${QQ_ID_ENCRYPTION_KEY}
   # QQs listed here are granted admin on every startup. Prefer:
   # uv run py-raspberry-qq-agent --config config.yaml admin add --qq 123456
   admin_qq_ids: []
@@ -77,12 +76,14 @@ message_gate:
 
 group_digest:
   enabled: false
-  # Raw group IDs stay inside the gateway; the agent receives encrypted group aliases.
+  # Group IDs are used internally; model inputs receive opaque references.
   groups: []
   interval_minutes: 60
   initial_lookback_minutes: 60
   min_messages: 1
   prompt: "整理这段时间内有价值的群聊讨论，忽略寒暄、重复和灌水。"
+  # Optional explicit MCP tool; empty saves Markdown locally only.
+  upload_tool: ""
 
 scheduler:
   enabled: true
@@ -122,3 +123,29 @@ mcp:
           - config.yaml
         allowed_tools:
           - upload_markdown
+
+keycloak:
+  issuer: ${OIDC_ISSUER:-}
+  admin_url: ${KEYCLOAK_ADMIN_URL:-}
+  client_id: ${BOT_KEYCLOAK_CLIENT_ID:-}
+  client_secret: ${BOT_KEYCLOAK_CLIENT_SECRET:-}
+  qq_attribute: qq_number
+
+guild:
+  enabled: false
+  database_url: ${GUILD_DATABASE_URL:-}
+  public_url: ${GUILD_PUBLIC_URL:-}
+  poll_seconds: 60
+  due_reminder:
+    enabled: true
+    advance_hours: 24
+  assignments:
+    enabled: true
+  weekly_report:
+    enabled: true
+    # UTC+8. Empty means no automatic run until a time is chosen.
+    # Example: {kind: weekly, weekdays: [mon], time: "09:00"}
+    schedule: {}
+    directory: guild-reports
+    prompt: "总结任务进展、协作讨论、未完成事项和需要关注的问题。"
+    upload_tool: ""

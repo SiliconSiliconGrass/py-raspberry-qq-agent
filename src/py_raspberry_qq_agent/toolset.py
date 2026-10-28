@@ -10,13 +10,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import AppConfig
-from .contacts import ContactDirectory, ContactVault
+from .contacts import ContactDirectory
 from .knowledge import KnowledgeBase
 from .mcp_runtime import McpManager
 from .messages import MessageStore
+from .model_boundary import ModelIds
 from .napcat import NapCatClient, OutboundQueue
 from .scheduler import ScheduleStore
-from .todos import TodoStore
 
 LOGGER = logging.getLogger(__name__)
 ToolHandler = Callable[[dict[str, Any]], Awaitable[Any]]
@@ -28,6 +28,7 @@ class Tool:
     description: str
     input_schema: dict[str, Any]
     handler: ToolHandler
+    contact_refs: bool = False
 
     def openai_definition(self) -> dict[str, Any]:
         return {
@@ -42,6 +43,7 @@ class Tool:
 
 class ToolRegistry:
     def __init__(self) -> None:
+        self.ids = ModelIds()
         self._tools: dict[str, Tool] = {}
 
     def register(self, tool: Tool) -> None:
@@ -56,6 +58,8 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise KeyError(f"unknown tool: {name}")
+        if tool.contact_refs:
+            return self.ids.encode(await tool.handler(self.ids.decode(arguments)))
         return await tool.handler(arguments)
 
 
@@ -65,39 +69,32 @@ class HistoryService:
         config: AppConfig,
         messages: MessageStore,
         napcat: NapCatClient,
-        vault: ContactVault,
     ) -> None:
         self._config = config
         self._messages = messages
         self._napcat = napcat
-        self._vault = vault
 
     async def get(
         self,
         chat_type: str,
-        encrypted_target_id: str,
+        target_id: str,
         *,
         limit: int,
         start_time: float | None,
         end_time: float | None,
     ) -> list[dict[str, Any]]:
-        kind, raw_target = self._vault.resolve(encrypted_target_id)
-        expected = "user" if chat_type == "private" else "group"
-        if kind != expected:
-            raise ValueError("encrypted target does not match chat_type")
-
         selected = await self._messages.history(
             chat_type,
-            encrypted_target_id,
+            target_id,
             limit=limit,
             start_time=start_time,
             end_time=end_time,
         )
         try:
-            remote = await self._napcat.fetch_history(chat_type, raw_target, limit)
+            remote = await self._napcat.fetch_history(chat_type, target_id, limit)
             selected = self._merge(
                 selected,
-                self._sanitize_remote(remote, chat_type, encrypted_target_id),
+                self._sanitize_remote(remote, chat_type, target_id),
                 start_time,
                 end_time,
                 limit,
@@ -106,7 +103,7 @@ class HistoryService:
             LOGGER.warning(
                 "NapCat history unavailable chat=%s target=%s error=%s",
                 chat_type,
-                encrypted_target_id,
+                target_id,
                 type(exc).__name__,
             )
 
@@ -118,7 +115,7 @@ class HistoryService:
                         float(item.get("timestamp", 0)),
                         self._timezone(),
                     ).isoformat(),
-                    "sender": item.get("encrypted_sender_id", ""),
+                    "sender_id": item.get("sender_id", ""),
                     "sender_name": item.get("sender_name", ""),
                     "content": item.get("content", ""),
                     "message_id": item.get("message_id", ""),
@@ -134,7 +131,7 @@ class HistoryService:
         self,
         messages: list[dict[str, Any]],
         chat_type: str,
-        encrypted_chat_id: str,
+        chat_id: str,
     ) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
         for item in messages:
@@ -147,8 +144,8 @@ class HistoryService:
             output.append(
                 {
                     "chat_type": chat_type,
-                    "encrypted_chat_id": encrypted_chat_id,
-                    "encrypted_sender_id": self._vault.encrypt("user", raw_sender),
+                    "chat_id": chat_id,
+                    "sender_id": raw_sender,
                     "sender_name": str(
                         sender.get("card") or sender.get("nickname") or ""
                     ),
@@ -177,14 +174,12 @@ class HistoryService:
             timestamp = float(item.get("timestamp", 0))
             if start_time is not None and timestamp < start_time:
                 continue
-            if end_time is not None and timestamp > end_time:
+            if end_time is not None and timestamp >= end_time:
                 continue
             key = str(
                 item.get("message_id")
                 or (
-                    f"{timestamp}:"
-                    f"{item.get('encrypted_sender_id', '')}:"
-                    f"{item.get('content', '')}"
+                    f"{timestamp}:{item.get('sender_id', '')}:{item.get('content', '')}"
                 )
             )
             by_key[key] = item
@@ -194,17 +189,15 @@ class HistoryService:
 
 
 class ChatDirectoryService:
-    """Read the bot's friends and joined groups without exposing raw QQ IDs."""
+    """Read the bot's friends and joined groups using plain QQ IDs internally."""
 
     def __init__(
         self,
         config: AppConfig,
         napcat: NapCatClient,
-        vault: ContactVault,
     ) -> None:
         self._config = config
         self._napcat = napcat
-        self._vault = vault
 
     async def friends(
         self,
@@ -220,7 +213,8 @@ class ChatDirectoryService:
             remark = str(friend.get("remark") or "")
             items.append(
                 {
-                    "encrypted_target_id": self._vault.encrypt("user", str(raw_id)),
+                    "target_id": str(raw_id),
+                    "chat_type": "private",
                     "nickname": nickname,
                     "remark": remark,
                     "display_name": remark or nickname,
@@ -229,7 +223,7 @@ class ChatDirectoryService:
         items.sort(
             key=lambda item: (
                 str(item["display_name"]).casefold(),
-                str(item["encrypted_target_id"]),
+                str(item["target_id"]),
             )
         )
         return self._page("friend", items, page, page_size)
@@ -246,19 +240,18 @@ class ChatDirectoryService:
                 continue
             items.append(
                 {
-                    "encrypted_target_id": self._vault.encrypt("group", str(raw_id)),
+                    "target_id": str(raw_id),
+                    "chat_type": "group",
                     "group_name": str(group.get("group_name") or ""),
                     "group_memo": str(group.get("group_memo") or ""),
                     "member_count": _optional_int(group.get("member_count")),
-                    "max_member_count": _optional_int(
-                        group.get("max_member_count")
-                    ),
+                    "max_member_count": _optional_int(group.get("max_member_count")),
                 }
             )
         items.sort(
             key=lambda item: (
                 str(item["group_name"]).casefold(),
-                str(item["encrypted_target_id"]),
+                str(item["target_id"]),
             )
         )
         return self._page("group", items, page, page_size)
@@ -294,7 +287,6 @@ class ChatDirectoryService:
 def build_tool_registry(
     *,
     config: AppConfig,
-    todos: TodoStore,
     schedules: ScheduleStore,
     knowledge: KnowledgeBase,
     contacts: ContactDirectory,
@@ -308,7 +300,7 @@ def build_tool_registry(
     async def send_qq_message(args: dict[str, Any]) -> dict[str, Any]:
         outbound.enqueue(
             _required_str(args, "chat_type"),
-            _required_str(args, "encrypted_target_id"),
+            _required_str(args, "target_id"),
             _required_str(args, "content"),
         )
         return {"ok": True, "queued": True}
@@ -318,7 +310,7 @@ def build_tool_registry(
             name="send_qq_message",
             description=(
                 "把一条 QQ 消息放入安全发送队列。普通模型文本不会被发送，"
-                "回复用户必须调用此工具。encrypted_target_id 必须来自消息上下文。"
+                "回复用户必须调用此工具。target_id 必须来自消息上下文。"
             ),
             input_schema=_object_schema(
                 {
@@ -326,18 +318,19 @@ def build_tool_registry(
                         "type": "string",
                         "enum": ["private", "group"],
                     },
-                    "encrypted_target_id": {"type": "string"},
+                    "target_id": {"type": "string"},
                     "content": {"type": "string"},
                 },
-                required=["chat_type", "encrypted_target_id", "content"],
+                required=["chat_type", "target_id", "content"],
             ),
             handler=send_qq_message,
+            contact_refs=True,
         )
     )
 
     async def get_qq_message_history(args: dict[str, Any]) -> dict[str, Any]:
         chat_type = _required_str(args, "chat_type")
-        encrypted_target_id = _required_str(args, "encrypted_target_id")
+        target_id = _required_str(args, "target_id")
         limit = min(
             max(int(args.get("limit", config.history_limit)), 1),
             config.history_max_fetch,
@@ -345,15 +338,11 @@ def build_tool_registry(
         timezone = ZoneInfo(config.timezone)
         start_time = _parse_time_arg(args.get("start_time"), timezone)
         end_time = _parse_time_arg(args.get("end_time"), timezone)
-        if (
-            start_time is not None
-            and end_time is not None
-            and start_time > end_time
-        ):
+        if start_time is not None and end_time is not None and start_time > end_time:
             raise ValueError("start_time must not be later than end_time")
         messages = await history.get(
             chat_type,
-            encrypted_target_id,
+            target_id,
             limit=limit,
             start_time=start_time,
             end_time=end_time,
@@ -364,7 +353,7 @@ def build_tool_registry(
         Tool(
             name="get_qq_message_history",
             description=(
-                "读取私聊或群聊的文本消息历史，按时间升序返回加密发送者与内容。"
+                "读取私聊或群聊的文本消息历史，按时间升序返回发送者引用与内容。"
                 "时间参数可使用 ISO 8601 或 Unix 秒。"
             ),
             input_schema=_object_schema(
@@ -373,22 +362,19 @@ def build_tool_registry(
                         "type": "string",
                         "enum": ["private", "group"],
                     },
-                    "encrypted_target_id": {"type": "string"},
+                    "target_id": {"type": "string"},
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": config.history_max_fetch,
                     },
-                    "start_time": {
-                        "anyOf": [{"type": "string"}, {"type": "number"}]
-                    },
-                    "end_time": {
-                        "anyOf": [{"type": "string"}, {"type": "number"}]
-                    },
+                    "start_time": {"anyOf": [{"type": "string"}, {"type": "number"}]},
+                    "end_time": {"anyOf": [{"type": "string"}, {"type": "number"}]},
                 },
-                required=["chat_type", "encrypted_target_id"],
+                required=["chat_type", "target_id"],
             ),
             handler=get_qq_message_history,
+            contact_refs=True,
         )
     )
 
@@ -408,7 +394,7 @@ def build_tool_registry(
         (
             "list_qq_friends",
             (
-                "列出机器人当前 QQ 好友。返回加密好友标识、昵称和备注，"
+                "列出机器人当前 QQ 好友。返回好友引用、昵称和备注，"
                 "并使用 page、page_size 分页；不要暴露原始 QQ 号。"
             ),
             list_qq_friends,
@@ -416,7 +402,7 @@ def build_tool_registry(
         (
             "list_qq_groups",
             (
-                "列出机器人当前加入的 QQ 群。返回加密群标识、群名、群备注和人数，"
+                "列出机器人当前加入的 QQ 群。返回群引用、群名、群备注和人数，"
                 "并使用 page、page_size 分页；不要暴露原始群号。"
             ),
             list_qq_groups,
@@ -437,62 +423,9 @@ def build_tool_registry(
                     }
                 ),
                 handler=handler,
+                contact_refs=True,
             )
         )
-
-    async def get_todo_list_length(_: dict[str, Any]) -> dict[str, Any]:
-        return {"length": await todos.length()}
-
-    async def get_todo_item(args: dict[str, Any]) -> dict[str, Any]:
-        item = await todos.get(_required_str(args, "id"))
-        return {"found": item is not None, "item": asdict(item) if item else None}
-
-    async def add_todo_item(args: dict[str, Any]) -> dict[str, Any]:
-        item = await todos.add(
-            _required_str(args, "content"),
-            source="agent",
-            context=str(args.get("context", "")),
-            metadata={"created_by": "agent"},
-        )
-        return {"ok": True, "item": asdict(item)}
-
-    async def delete_todo_item(args: dict[str, Any]) -> dict[str, Any]:
-        item = await todos.delete(_required_str(args, "id"))
-        return {"deleted": item is not None, "id": args["id"]}
-
-    for name, description, schema, handler in (
-        (
-            "get_todo_list_length",
-            "获取当前 TODO 列表长度。",
-            _object_schema({}),
-            get_todo_list_length,
-        ),
-        (
-            "get_todo_item",
-            "按 id 获取一个 TODO 的完整值。",
-            _object_schema({"id": {"type": "string"}}, ["id"]),
-            get_todo_item,
-        ),
-        (
-            "add_todo_item",
-            "向 TODO 列表添加一项当前需要立即处理的工作。",
-            _object_schema(
-                {
-                    "content": {"type": "string"},
-                    "context": {"type": "string"},
-                },
-                ["content"],
-            ),
-            add_todo_item,
-        ),
-        (
-            "delete_todo_item",
-            "处理完成后永久删除指定的 TODO 项。",
-            _object_schema({"id": {"type": "string"}}, ["id"]),
-            delete_todo_item,
-        ),
-    ):
-        registry.register(Tool(name, description, schema, handler))
 
     async def manage_scheduled_tasks(args: dict[str, Any]) -> dict[str, Any]:
         action = _required_str(args, "action")
@@ -503,7 +436,7 @@ def build_tool_registry(
                 title=_required_str(args, "title"),
                 content=_required_str(args, "content"),
                 schedule=_required_object(args, "schedule"),
-                encrypted_target_id=str(args.get("encrypted_target_id", "")),
+                target_id=str(args.get("target_id", "")),
                 chat_type=str(args.get("chat_type", "")),
             )
             return {"ok": True, "task": asdict(task)}
@@ -519,7 +452,7 @@ def build_tool_registry(
                 enabled=args.get("enabled")
                 if isinstance(args.get("enabled"), bool)
                 else None,
-                encrypted_target_id=_optional_str(args, "encrypted_target_id"),
+                target_id=_optional_str(args, "target_id"),
                 chat_type=_optional_str(args, "chat_type"),
             )
             return {
@@ -564,11 +497,12 @@ def build_tool_registry(
                         "type": "string",
                         "enum": ["private", "group"],
                     },
-                    "encrypted_target_id": {"type": "string"},
+                    "target_id": {"type": "string"},
                 },
                 ["action"],
             ),
             handler=manage_scheduled_tasks,
+            contact_refs=True,
         )
     )
 
@@ -591,7 +525,7 @@ def build_tool_registry(
         )
 
     async def get_contact_profile(args: dict[str, Any]) -> dict[str, Any]:
-        return contacts.get(_required_str(args, "encrypted_id"))
+        return contacts.get(_required_str(args, "contact_id"))
 
     async def list_contact_profiles(args: dict[str, Any]) -> dict[str, Any]:
         return contacts.page(
@@ -613,12 +547,12 @@ def build_tool_registry(
         )
 
     async def update_contact_profile(args: dict[str, Any]) -> dict[str, Any]:
-        encrypted_id = _required_str(args, "encrypted_id")
+        contact_id = _required_str(args, "contact_id")
         display_name = _optional_str(args, "display_name")
         notes = _optional_str(args, "notes")
         if display_name is None and notes is None:
             raise ValueError("display_name or notes is required")
-        return contacts.update(encrypted_id, display_name, notes)
+        return contacts.update(contact_id, display_name, notes)
 
     for name, description, schema, handler in (
         (
@@ -641,7 +575,7 @@ def build_tool_registry(
         ),
         (
             "search_contact_profiles",
-            "按加密标识、显示名称或备注搜索联系人资料，并支持分页。",
+            "按显示名称或备注搜索联系人资料，并支持分页。",
             _object_schema(
                 {
                     "query": {"type": "string"},
@@ -658,29 +592,29 @@ def build_tool_registry(
         ),
         (
             "get_contact_profile",
-            "读取一个加密联系人的资料；该账号不要求是机器人 QQ 好友。",
-            _object_schema({"encrypted_id": {"type": "string"}}, ["encrypted_id"]),
+            "读取一个联系人的资料；该账号不要求是机器人 QQ 好友。",
+            _object_schema({"contact_id": {"type": "string"}}, ["contact_id"]),
             get_contact_profile,
         ),
         (
             "update_contact_profile",
             (
-                "新建或更新加密联系人的昵称和备注，用于逐渐认识群聊中的同事。"
+                "新建或更新联系人的昵称和备注，用于逐渐认识群聊中的同事。"
                 "该账号不要求是机器人 QQ 好友。"
                 "此工具不能修改 admin 权限。"
             ),
             _object_schema(
                 {
-                    "encrypted_id": {"type": "string"},
+                    "contact_id": {"type": "string"},
                     "display_name": {"type": "string"},
                     "notes": {"type": "string"},
                 },
-                ["encrypted_id"],
+                ["contact_id"],
             ),
             update_contact_profile,
         ),
     ):
-        registry.register(Tool(name, description, schema, handler))
+        registry.register(Tool(name, description, schema, handler, contact_refs=True))
 
     async def list_knowledge_files(args: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -794,6 +728,7 @@ def build_tool_registry(
         registry.register(Tool(name, description, schema, handler))
 
     for remote_tool in mcp.tools:
+
         async def call_remote(
             args: dict[str, Any],
             exposed_name: str = remote_tool.exposed_name,

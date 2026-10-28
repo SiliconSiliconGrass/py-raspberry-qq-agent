@@ -50,7 +50,7 @@ class ScheduledTask:
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
-    encrypted_target_id: str = ""
+    target_id: str = ""
     chat_type: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -78,7 +78,7 @@ class ScheduleStore:
         title: str,
         content: str,
         schedule: dict[str, Any],
-        encrypted_target_id: str = "",
+        target_id: str = "",
         chat_type: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> ScheduledTask:
@@ -94,7 +94,7 @@ class ScheduleStore:
             next_run_at=next_run.isoformat(),
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
-            encrypted_target_id=encrypted_target_id,
+            target_id=target_id,
             chat_type=chat_type,
             metadata=metadata or {},
         )
@@ -119,7 +119,7 @@ class ScheduleStore:
         content: str | None = None,
         schedule: dict[str, Any] | None = None,
         enabled: bool | None = None,
-        encrypted_target_id: str | None = None,
+        target_id: str | None = None,
         chat_type: str | None = None,
     ) -> ScheduledTask | None:
         async with self._lock:
@@ -135,8 +135,8 @@ class ScheduleStore:
                 if not content.strip():
                     raise ValueError("scheduled task content cannot be empty")
                 task.content = content.strip()
-            if encrypted_target_id is not None:
-                task.encrypted_target_id = encrypted_target_id
+            if target_id is not None:
+                task.target_id = target_id
             if chat_type is not None:
                 task.chat_type = chat_type
             if enabled is not None:
@@ -218,7 +218,7 @@ class Scheduler:
                         LOGGER.info(
                             "scheduled task fired id=%s target=%s",
                             task.id,
-                            task.encrypted_target_id or "-",
+                            task.target_id or "-",
                         )
                         await self._on_due(task)
                     except Exception:

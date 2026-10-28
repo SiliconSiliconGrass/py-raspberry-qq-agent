@@ -11,6 +11,7 @@ from .config import AppConfig
 from .contacts import ContactDirectory, RoleStore
 from .llm import LlmError, OpenAICompatibleClient, extract_json_object
 from .messages import MessageStore
+from .model_boundary import ModelIds
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ImportanceGate:
         contacts: ContactDirectory,
         messages: MessageStore,
     ) -> None:
+        self._ids = ModelIds()
         self._config = config
         self._classifier = classifier
         self._allowlist = allowlist
@@ -44,12 +46,12 @@ class ImportanceGate:
         self,
         *,
         chat_type: str,
-        encrypted_chat_id: str,
-        encrypted_sender_id: str,
+        chat_id: str,
+        sender_id: str,
         content: str,
         mentioned_bot: bool,
     ) -> ImportanceDecision:
-        if not self._allowlist.allows(chat_type, encrypted_chat_id):
+        if not self._allowlist.allows(chat_type, chat_id):
             return ImportanceDecision(False, "聊天不在启用中的允许列表", "allowlist")
         if chat_type == "group" and not mentioned_bot:
             return ImportanceDecision(False, "群消息没有 @ 机器人", "routing")
@@ -61,19 +63,19 @@ class ImportanceGate:
         ):
             return ImportanceDecision(False, "群聊 @ 自动回复已关闭", "routing")
 
-        role = self._roles.role_of(encrypted_sender_id)
+        role = self._roles.role_of(sender_id)
         if role == "admin":
             return ImportanceDecision(True, "发送者具有 admin 权限", "role")
 
-        profile = self._contacts.get(encrypted_sender_id)
+        profile = self._contacts.get(sender_id)
         recent = await self._messages.history(
             chat_type,
-            encrypted_chat_id,
+            chat_id,
             limit=self._config.classifier_context_messages,
         )
         compact_history = [
             {
-                "sender": item.get("encrypted_sender_id", ""),
+                "sender_id": item.get("sender_id", ""),
                 "name": item.get("sender_name", ""),
                 "content": str(item.get("content", ""))[
                     : self._config.classifier_context_chars
@@ -89,8 +91,8 @@ class ImportanceGate:
                 "无明显需要的 @、重复内容、广告或无法行动的闲聊不重要。"
             ),
             "chat_type": chat_type,
-            "encrypted_chat_id": encrypted_chat_id,
-            "encrypted_sender_id": encrypted_sender_id,
+            "chat_id": chat_id,
+            "sender_id": sender_id,
             "role": role,
             "profile": {
                 "display_name": profile.get("display_name", ""),
@@ -115,7 +117,7 @@ class ImportanceGate:
             },
             {
                 "role": "user",
-                "content": json.dumps(prompt, ensure_ascii=False),
+                "content": json.dumps(self._ids.encode(prompt), ensure_ascii=False),
             },
         ]
         try:
@@ -138,7 +140,7 @@ class ImportanceGate:
         except (LlmError, ValueError, TypeError) as exc:
             LOGGER.warning(
                 "importance classification failed sender=%s error=%s",
-                encrypted_sender_id,
+                sender_id,
                 type(exc).__name__,
             )
             return ImportanceDecision(

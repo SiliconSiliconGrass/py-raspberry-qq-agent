@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from py_raspberry_qq_agent.scheduler import ScheduleStore, compute_next_run
-from py_raspberry_qq_agent.todos import TodoStore
+from py_raspberry_qq_agent.tasks import TaskQueue
 
 
 def test_schedule_types_find_future_occurrences() -> None:
@@ -53,7 +53,7 @@ async def test_schedule_store_persists_and_allows_modification(tmp_path: Path) -
         content="summarize",
         schedule={"kind": "daily", "time": "12:00"},
         chat_type="group",
-        encrypted_target_id="qq-group:test",
+        target_id="qq-group:test",
     )
     assert task.next_run_at
 
@@ -70,13 +70,8 @@ async def test_schedule_store_persists_and_allows_modification(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_todo_store_persists(tmp_path: Path) -> None:
-    path = tmp_path / "todos.json"
-    store = TodoStore(path)
-    item = await store.add("work", chat_type="private", encrypted_target_id="qq-user:x")
-
-    reopened = TodoStore(path)
-    loaded = await reopened.get(item.id)
-    assert loaded is not None
-    assert loaded.chat_type == "private"
-    assert await reopened.length() == 1
+async def test_task_can_have_no_chat_and_does_not_survive_queue_recreation() -> None:
+    queue = TaskQueue()
+    await queue.add("generate a report")
+    assert (await queue.get()).target_id == ""
+    assert TaskQueue().empty()
