@@ -73,6 +73,10 @@ message_gate:
   outbound_min_interval_seconds: 2
   outbound_max_interval_seconds: 4
   outbound_send_timeout_seconds: 30
+  # 消息进入任务队列后，若超过该秒数仍未向该聊天发出第一条消息，就先发一条
+  # 占位回复，避免用户以为消息没被收到。设为 0 关闭。
+  first_reply_delay_seconds: 3
+  first_reply_message: "这个问题有点复杂呢，让我好好想想……"
 
 group_digest:
   enabled: false

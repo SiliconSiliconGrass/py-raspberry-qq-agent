@@ -4,6 +4,7 @@ import logging
 from collections import deque
 
 from .contacts import ContactDirectory
+from .first_reply import FirstReplyNotice
 from .messages import MessageStore
 from .napcat import IncomingMessage
 from .priority import ImportanceGate
@@ -21,11 +22,13 @@ class IncomingService:
         gate: ImportanceGate,
         tasks: TaskQueue,
         dedupe_messages: int = 2000,
+        first_reply: FirstReplyNotice | None = None,
     ) -> None:
         self._contacts = contacts
         self._messages = messages
         self._gate = gate
         self._tasks = tasks
+        self._first_reply = first_reply
         self._seen_ids: deque[str] = deque(maxlen=dedupe_messages)
         self._seen_set: set[str] = set()
 
@@ -101,3 +104,5 @@ class IncomingService:
             chat_id,
             decision.method,
         )
+        if self._first_reply is not None:
+            self._first_reply.arm(item)

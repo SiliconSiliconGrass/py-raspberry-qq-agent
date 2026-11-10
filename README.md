@@ -92,6 +92,8 @@ message_gate:
 启用后只允许指定聊天触发 Agent 和接收发送队列中的消息；管理员也受限制。
 未 @机器人的群消息不触发模型。历史、好友列表和群列表查询不受此列表限制。
 
+消息进入 Agent 队列后，若超过 `message_gate.first_reply_delay_seconds` 秒（默认 3）仍未发出第一条消息，会先自动发送一条占位提示（`message_gate.first_reply_message`），以免用户误以为消息没被收到；设为 0 可关闭。
+
 好友和群工具支持 `page` / `page_size` 分页。联系人备注支持非好友，不用于建立外部账号绑定关系。
 
 ## 定时任务与报告

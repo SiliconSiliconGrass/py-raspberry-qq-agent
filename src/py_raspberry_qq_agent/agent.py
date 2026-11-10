@@ -8,6 +8,7 @@ from dataclasses import asdict
 from typing import Any
 
 from .config import AppConfig
+from .first_reply import FirstReplyNotice
 from .llm import AssistantReply, OpenAICompatibleClient
 from .tasks import AgentTask, TaskQueue
 from .toolset import ToolRegistry, json_tool_result
@@ -104,9 +105,16 @@ class AgentRunner:
 
 
 class AgentWorker:
-    def __init__(self, runner: AgentRunner, tasks: TaskQueue) -> None:
+    def __init__(
+        self,
+        runner: AgentRunner,
+        tasks: TaskQueue,
+        *,
+        first_reply: FirstReplyNotice | None = None,
+    ) -> None:
         self._runner = runner
         self._tasks = tasks
+        self._first_reply = first_reply
         self._worker: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -133,6 +141,8 @@ class AgentWorker:
                     "agent task failed id=%s source=%s", task.id, task.source
                 )
             finally:
+                if self._first_reply is not None:
+                    self._first_reply.disarm(task)
                 self._tasks.task_done()
 
 
