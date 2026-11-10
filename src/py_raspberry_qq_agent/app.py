@@ -10,6 +10,7 @@ from .assignments import AssignmentNotifications
 from .config import AppConfig
 from .contacts import ContactDirectory, RoleStore
 from .digest import GroupDigestService
+from .first_reply import FirstReplyNotice
 from .guild import DueReminders, GuildRepository, WindowPoller
 from .guild_reports import WeeklyReports
 from .incoming import IncomingService
@@ -46,6 +47,7 @@ class Application:
     history: HistoryService
     chat_directory: ChatDirectoryService
     incoming: IncomingService
+    first_reply: FirstReplyNotice
     digest: GroupDigestService
     worker: AgentWorker | None = None
     scheduler: Scheduler | None = None
@@ -108,6 +110,11 @@ class Application:
 
         napcat = NapCatClient(config, on_napcat_message)
         outbound = OutboundQueue(config, napcat, allowlist, messages)
+        first_reply = FirstReplyNotice(
+            outbound=outbound,
+            delay_seconds=config.first_reply_delay_seconds,
+            message=config.first_reply_message,
+        )
         gate = ImportanceGate(
             config, classifier_llm, allowlist, roles, contacts, messages
         )
@@ -119,6 +126,7 @@ class Application:
             gate=gate,
             tasks=tasks,
             dedupe_messages=config.history_dedupe_messages,
+            first_reply=first_reply,
         )
         digest = GroupDigestService(
             config=config,
@@ -144,6 +152,7 @@ class Application:
             history=history,
             chat_directory=chat_directory,
             incoming=incoming,
+            first_reply=first_reply,
             digest=digest,
         )
         return application
@@ -163,6 +172,7 @@ class Application:
         self.worker = AgentWorker(
             AgentRunner(self.config, self.main_llm, registry),
             self.tasks,
+            first_reply=self.first_reply,
         )
         self.scheduler = Scheduler(
             self.schedules,

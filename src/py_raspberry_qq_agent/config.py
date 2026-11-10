@@ -14,6 +14,8 @@ from .keycloak import KeycloakConfig
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
+DEFAULT_FIRST_REPLY_MESSAGE = "这个问题有点复杂呢，让我好好想想……"
+
 
 class ConfigError(ValueError):
     """Raised when the YAML configuration is missing or invalid."""
@@ -130,6 +132,8 @@ class AppConfig:
     outbound_min_interval_seconds: float
     outbound_max_interval_seconds: float
     outbound_send_timeout_seconds: float
+    first_reply_delay_seconds: float
+    first_reply_message: str
 
     digest_enabled: bool
     digest_groups: list[str]
@@ -321,6 +325,12 @@ class AppConfig:
             outbound_send_timeout_seconds=float(
                 gate.get("outbound_send_timeout_seconds", 30)
             ),
+            first_reply_delay_seconds=float(
+                gate.get("first_reply_delay_seconds", 3)
+            ),
+            first_reply_message=str(
+                gate.get("first_reply_message") or DEFAULT_FIRST_REPLY_MESSAGE
+            ),
             digest_enabled=_as_bool(digest.get("enabled", False)),
             digest_groups=[
                 str(item).strip()
@@ -417,6 +427,15 @@ class AppConfig:
             raise ConfigError("guild.weekly_report.directory cannot be empty")
         if self.outbound_min_interval_seconds < 0:
             raise ConfigError("outbound minimum interval cannot be negative")
+        if (
+            not math.isfinite(self.first_reply_delay_seconds)
+            or self.first_reply_delay_seconds < 0
+        ):
+            raise ConfigError(
+                "message_gate.first_reply_delay_seconds must be non-negative and finite"
+            )
+        if not self.first_reply_message.strip():
+            raise ConfigError("message_gate.first_reply_message cannot be empty")
         if not self.main_llm.api_key:
             raise ConfigError("llm.main.api_key is required")
         if not self.classifier_llm.api_key:

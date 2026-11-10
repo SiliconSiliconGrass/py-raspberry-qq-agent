@@ -459,6 +459,7 @@ class OutboundQueue:
         )
         self._worker: asyncio.Task[None] | None = None
         self._last_sent_at: float | None = None
+        self._last_enqueue_at: dict[tuple[str, str], float] = {}
 
     def start(self) -> None:
         if self._worker is None:
@@ -484,7 +485,12 @@ class OutboundQueue:
             raise ValueError("message content cannot be empty")
         if self._queue.full():
             raise RuntimeError("outbound message queue is full")
+        self._last_enqueue_at[(chat_type, target_id)] = time.monotonic()
         self._queue.put_nowait((chat_type, target_id, content))
+
+    def last_enqueue_at(self, chat_type: str, target_id: str) -> float:
+        """Return when a message for this chat was last queued (0.0 if never)."""
+        return self._last_enqueue_at.get((chat_type, target_id), 0.0)
 
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
